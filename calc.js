@@ -28,7 +28,7 @@
     if (!text) return null;
     const t = text.toLowerCase();
     for (const k of WEATHER_KEYS) {
-      if (t.includes(k)) return k;
+    if (t.includes(k)) return k;
     }
     return null;
   }
@@ -38,11 +38,11 @@
   }
   function httpGet(url, cb) {
     GM_xmlhttpRequest({
-      method: "GET",
-      url,
-      onload: r => cb(null, r.responseText),
-      onerror: e => cb(e, null),
-      ontimeout: e => cb(e, null)
+    method: "GET",
+    url,
+    onload: r => cb(null, r.responseText),
+    onerror: e => cb(e, null),
+    ontimeout: e => cb(e, null)
     });
   }
   function parseWeatherFromMatch(html) {
@@ -59,16 +59,16 @@
             weatherText = m[1].trim();
             break;
         }
-      }
+        }
     }
     if (!weatherText) {
-      const bodyText = (doc.body.textContent || '').toLowerCase();
-      for (const k of WEATHER_KEYS) {
+        const bodyText = (doc.body.textContent || '').toLowerCase();
+        for (const k of WEATHER_KEYS) {
         if (bodyText.includes(k)) {
           weatherText = k;
           break;
         }
-      }
+        } 
     }
     const key = getWeatherKey(weatherText);
     return key;
@@ -93,9 +93,9 @@
             case "LW": case "LF": case "CF": case "ST": case "RW": case "RF": case "AM":
             fwds += 1; break;
         }
-      }
-      cell.textContent = fwds;
-      cell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
+    }
+        cell.textContent = fwds;
+        cell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
     }).catch(e => { cell.textContent = "Err"; });
   }
   function enhanceRosterMatchesPage() {
@@ -123,10 +123,10 @@
     let stageIndex = -1;
     const headerTds = headers[0]?.querySelectorAll('td');
     if (headerTds) {
-      for (let i = 0; i < headerTds.length; i++) {
+    for (let i = 0; i < headerTds.length; i++) {
         if (/Стадия/i.test(headerTds[i].textContent)) {
-          stageIndex = i;
-          break;
+        stageIndex = i;
+        break;
         }
       }
     }
@@ -135,59 +135,67 @@
     const jobsFwds = [];
     const rows = Array.from(matchesTable.querySelectorAll('tr')).filter(tr => tr.getAttribute('bgcolor') !== '#006600');
     rows.forEach(tr => {
-      if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
-      if (tr.querySelector('table')) return;
-      const tds = tr.querySelectorAll('td');
-      if (tds.length <= stageIndex + 1) return;
-      const resultTd = tds[stageIndex + 1];
-      if (!resultTd.hasAttribute('title')) return;
-      if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
-      const tdWeather = document.createElement('td');
-      tdWeather.className = 'lh16 txt weather_match';
-      tdWeather.style.textAlign = 'center';
-      tr.appendChild(tdWeather);
-      const tdFwds = document.createElement('td');
-      tdFwds.className = 'lh16 txt fwds_match';
-      tdFwds.style.textAlign = 'center';
-      tr.appendChild(tdFwds);
-      let matchLink = null;
-      for (let i = 0; i < tds.length; i++) {
+    if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
+    if (tr.querySelector('table')) return;
+    const tds = tr.querySelectorAll('td');
+    if (tds.length <= stageIndex + 1) return;
+    const resultTd = tds[stageIndex + 1];
+    if (!resultTd.hasAttribute('title')) return;
+    if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
+    const tdWeather = document.createElement('td');
+    tdWeather.className = 'lh16 txt weather_match';
+    tdWeather.style.textAlign = 'center';
+    tr.appendChild(tdWeather);
+    const tdFwds = document.createElement('td');
+    tdFwds.className = 'lh16 txt fwds_match';
+    tdFwds.style.textAlign = 'center';
+    tr.appendChild(tdFwds);
+    let matchLink = null;
+    for (let i = 0; i < tds.length; i++) {
         const a = tds[i].querySelector('a[href*="viewmatch.php"]');
         if (a) { matchLink = a.href; break; }
-      }
-      if (matchLink) {
+    }
+    if (matchLink) {
         jobsWeather.push({ url: matchLink, cell: tdWeather });
         const is_home = tds[5]?.innerText.trim() === "Д";
         jobsFwds.push({ url: matchLink, is_home, cell: tdFwds });
       }
     });
     if (jobsWeather.length) {
-      const MAX_PARALLEL = 5;
-      let active = 0, queue = jobsWeather.slice();
-      function work() {
-        while (active < MAX_PARALLEL && queue.length) {
-          const job = queue.shift();
-          active++;
-          httpGet(job.url, (err, html) => {
+    const MAX_PARALLEL = 5;
+    let active = 0, queue = jobsWeather.slice();
+    function work() {
+    while (active < MAX_PARALLEL && queue.length) {
+            const job = queue.shift();
+            active++;
+            httpGet(job.url, (err, html) => {
             let key = null;
             if (!err && html) key = parseWeatherFromMatch(html);
             const icon = key ? setWeatherIcon(key) : '';
-            job.cell.innerHTML = icon ? `<img src="${icon}" style="height:14px">` : '';
+            const label = key || '';
+            const koef = key ? (WEATHER_SET[key]?.koef ?? '') : '';
+            const title = key ? (koef ? `${label} (Кф: ${koef})` : label) : '';
+            if (icon) {
+            job.cell.innerHTML = `<img src="${icon}" style="height:14px" alt="${label}">`;
+            job.cell.title = title; // нативная подсказка
+            } else {
+            job.cell.innerHTML = '';
+            job.cell.removeAttribute('title');
+            }
             active--;
             work();
-          });
+        });
         }
-      }
+    }
       work();
     }
     if (jobsFwds.length) {
-      jobsFwds.forEach(job => getFwds(job.url, job.is_home, job.cell));
+    jobsFwds.forEach(job => getFwds(job.url, job.is_home, job.cell));
     }
   }
 
 function enhanceRosterStatsPage() {
     const teamNum = (location.search.match(/num=(\d+)/) || [])[1] || '2647';
-
     const WEATHER_SET = WEATHER_LABELS.reduce((acc, w) => { acc[w.key] = w; return acc; }, {});
     const WEATHER_KEYS = Object.keys(WEATHER_SET);
     function getWeatherKey(text) {
@@ -288,8 +296,8 @@ container.innerHTML =
     };
 
 function fetchSeasonMatches(season, cb) {
-      const url = `https://www.virtualsoccer.ru/roster_m.php?num=${teamNum}&season=${season}`;
-      httpGet(url, (err, html) => cb(html));
+    const url = `https://www.virtualsoccer.ru/roster_m.php?num=${teamNum}&season=${season}`;
+    httpGet(url, (err, html) => cb(html));
     }
 
 function parseHomeLinks(html) {
@@ -324,8 +332,8 @@ function calculateWeather(season) {
     fetchSeasonMatches(season, function(html) {
         const matchLinks = parseHomeLinks(html);
         if (!matchLinks.length) {
-          progress.textContent = 'Домашних матчей не найдено!';
-          return;
+        progress.textContent = 'Домашних матчей не найдено!';
+        return;
         }
         progress.textContent = `Найдено домашних матчей: ${matchLinks.length}. Загружаем погоду...`;
         let weatherStats = {};
@@ -377,7 +385,7 @@ function render() {
 
     totalCell.innerHTML = `<b>ИТОГО КФ:</b> ${kfSum.toFixed(2)} (матчей: ${total})`;
 }
-      });
+    });
     }
 }
 
