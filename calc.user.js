@@ -1,13 +1,35 @@
 // ==UserScript==
-// @name         ВСОЛ: Погода и подсчёт атакующих игроков
+// @name         VSOL: weather and FWDs count
+// @license MIT
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Калькулятор статсы погоды и напов
-// @author       Arne + nurmukhametov
-// @match        https://www.virtualsoccer.ru/roster_m.php*
-// @match        https://www.virtualsoccer.ru/roster_s.php*
+// @version      1.033
+// @description  Калькулятор статсы погоды, напов и определение школы команды
+// @author       community
+// @match        *://*.virtualsoccer.ru/roster_m.php*
+// @match        *://*.vfleague.com/roster_m.php*
+// @match        *://*.vfliga.ru/roster_m.php*
+// @match        *://*.vfliga.com/roster_m.php*
+// @match        *://*.virtualsoccer.ru/roster_s.php*
+// @match        *://*.vfleague.com/roster_s.php*
+// @match        *://*.vfliga.ru/roster_s.php*
+// @match        *://*.vfliga.com/roster_s.php*
+// @match        *://*.virtualsoccer.ru/managerzone.php*
+// @match        *://*.vfleague.com/managerzone.php*
+// @match        *://*.vfliga.ru/managerzone.php*
+// @match        *://*.vfliga.com/managerzone.php*
+// @match        *://*.virtualsoccer.ru/mng_asktoplay.php*
+// @match        *://*.vfleague.com/mng_asktoplay.php*
+// @match        *://*.vfliga.ru/mng_asktoplay.php*
+// @match        *://*.vfliga.com/mng_asktoplay.php*
+// @match        *://*.virtualsoccer.ru/mng_asktoplay.php*
+// @match        *://*.vfleague.com/mng_asktoplay.php*
+// @match        *://*.vfliga.ru/mng_asktoplay.php*
+// @match        *://*.vfliga.com/mng_asktoplay.php*
 // @grant        GM_xmlhttpRequest
 // @connect      virtualsoccer.ru
+// @connect      vfleague.com
+// @connect      vfliga.ru
+// @connect      vfliga.com
 // @run-at       document-end
 // ==/UserScript==
 
@@ -96,7 +118,7 @@
     }
         cell.textContent = fwds;
         cell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
-    }).catch(e => { cell.textContent = "Err"; });
+    }).catch(() => { cell.textContent = "Err"; });
   }
   function enhanceRosterMatchesPage() {
     const mainTables = Array.from(document.querySelectorAll('table.tbl'));
@@ -168,9 +190,9 @@
     while (active < MAX_PARALLEL && queue.length) {
             const job = queue.shift();
             active++;
-            httpGet(job.url, (err, html) => {
+            httpGet(job.url, (_, html) => {
             let key = null;
-            if (!err && html) key = parseWeatherFromMatch(html);
+            if (html) key = parseWeatherFromMatch(html);
             const icon = key ? setWeatherIcon(key) : '';
             const label = key || '';
             const koef = key ? (WEATHER_SET[key]?.koef ?? '') : '';
@@ -196,57 +218,6 @@
 
 function enhanceRosterStatsPage() {
     const teamNum = (location.search.match(/num=(\d+)/) || [])[1] || '2647';
-    const WEATHER_SET = WEATHER_LABELS.reduce((acc, w) => { acc[w.key] = w; return acc; }, {});
-    const WEATHER_KEYS = Object.keys(WEATHER_SET);
-    function getWeatherKey(text) {
-        if (!text) return null;
-        const t = text.toLowerCase();
-        for (const k of WEATHER_KEYS) {
-            if (t.includes(k)) return k;
-        }
-        return null;
-    }
-    function setWeatherIcon(key) {
-        const meta = WEATHER_SET[key];
-        return meta ? `https://www.virtualsoccer.ru/weather/weather_green${meta.icon}.svg` : '';
-    }
-    function httpGet(url, cb) {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url,
-            onload: r => cb(null, r.responseText),
-            onerror: e => cb(e, null),
-            ontimeout: e => cb(e, null)
-        });
-    }
-    function parseWeatherFromMatch(html) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        let weatherText = '';
-        const nodes = Array.from(doc.querySelectorAll('td, div, span'));
-        for (const el of nodes) {
-            const txt = (el.textContent || '').trim();
-            if (!txt) continue;
-            if (txt.toLowerCase().includes('погода')) {
-                const m = txt.match(/Погода:\s*([А-Яа-яЁё\s\-]+)/i);
-                if (m) {
-                    weatherText = m[1].trim();
-                    break;
-                }
-            }
-        }
-        if (!weatherText) {
-            const bodyText = (doc.body.textContent || '').toLowerCase();
-            for (const k of WEATHER_KEYS) {
-                if (bodyText.includes(k)) {
-                    weatherText = k;
-                    break;
-                }
-            }
-        }
-        const key = getWeatherKey(weatherText);
-        return key;
-    }
 
 const container = document.createElement('div');
 container.id = 'vs-weather-ui';
@@ -297,7 +268,7 @@ container.innerHTML =
 
 function fetchSeasonMatches(season, cb) {
     const url = `https://www.virtualsoccer.ru/roster_m.php?num=${teamNum}&season=${season}`;
-    httpGet(url, (err, html) => cb(html));
+    httpGet(url, (_, html) => cb(html));
     }
 
 function parseHomeLinks(html) {
@@ -346,7 +317,7 @@ function pump() {
     while (active < MAX_PARALLEL && queue.length) {
     const url = queue.shift();
     active++;
-    httpGet(url, (err, html) => {
+    httpGet(url, (_, html) => {
         const key = html ? parseWeatherFromMatch(html) : null;
         if (key) weatherStats[key] = (weatherStats[key] || 0) + 1;
         done++;
@@ -389,10 +360,374 @@ function render() {
     }
 }
 
-  const href = location.href;
+  // Функция для определения школы по суммам спецвозможностей
+  function detectSchoolFromSums(sunnySum, rainySum) {
+    const THRESHOLD = 30;
+    
+    if (sunnySum >= THRESHOLD && sunnySum > rainySum) return '☀️';
+    if (rainySum >= THRESHOLD && rainySum > sunnySum) return '🌧️';
+    if (sunnySum >= THRESHOLD && rainySum >= THRESHOLD) return sunnySum > rainySum ? '☀️' : '🌧️';
+    
+    return '';
+  }
+
+  // Функция для извлечения спецвозможностей из plrdat
+  function extractAbilitiesFromPlrdat(html) {
+    const plrdatMatch = html.match(/var plrdat\s*=\s*\[(.*?)\];/s);
+    if (!plrdatMatch) return null;
+    
+    try {
+      const plrdatText = plrdatMatch[1];
+      const abilities = {
+        д: 0, пк: 0, км: 0,
+        г: 0, ск: 0, пд: 0
+      };
+      
+      const spRegex = /["']([А-Яа-яЁё]{1,2})(\d+)["']/g;
+      let match;
+      
+      while ((match = spRegex.exec(plrdatText)) !== null) {
+        const name = match[1].toLowerCase().trim();
+        const level = parseInt(match[2], 10);
+        
+        if (abilities.hasOwnProperty(name)) {
+          abilities[name] += level;
+        }
+      }
+      
+      return abilities;
+    } catch {
+      return null;
+    }
+  }
+
+  // Кэш школ команд
+  const CACHE_KEY = 'vsol_team_schools';
+  const CACHE_EXPIRY = 30 * 24 * 60 * 60 * 1000; // 30 дней
+  
+  function getSchoolCache() {
+    try {
+      const cached = localStorage.getItem(CACHE_KEY);
+      if (!cached) return {};
+      
+      const data = JSON.parse(cached);
+      const now = Date.now();
+      
+      // Удаляем устаревшие записи
+      Object.keys(data).forEach(key => {
+        if (now - data[key].time > CACHE_EXPIRY) {
+          delete data[key];
+        }
+      });
+      
+      return data;
+    } catch {
+      return {};
+    }
+  }
+  
+  function setSchoolCache(teamId, school) {
+    try {
+      const cache = getSchoolCache();
+      cache[teamId] = { school, time: Date.now() };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
+    } catch {
+      // Игнорируем ошибки localStorage
+    }
+  }
+
+  // Функция для получения спецвозможностей команды
+  function fetchTeamSchool(teamId, callback) {
+    // Проверяем кэш
+    const cache = getSchoolCache();
+    if (cache[teamId]) {
+      callback(cache[teamId].school);
+      return;
+    }
+    
+    const url = `https://www.virtualsoccer.ru/roster.php?num=${teamId}`;
+    
+    httpGet(url, (_, html) => {
+      if (!html) {
+        callback('');
+        return;
+      }
+      
+      const abilitiesFromPlrdat = extractAbilitiesFromPlrdat(html);
+      if (abilitiesFromPlrdat) {
+        const sunnySum = abilitiesFromPlrdat.д + abilitiesFromPlrdat.пк + abilitiesFromPlrdat.км;
+        const rainySum = abilitiesFromPlrdat.г + abilitiesFromPlrdat.ск + abilitiesFromPlrdat.пд;
+        const school = detectSchoolFromSums(sunnySum, rainySum);
+        
+        // Сохраняем в кэш
+        setSchoolCache(teamId, school);
+        callback(school);
+      } else {
+        callback('');
+      }
+    });
+  }
+
+  // Функция для загрузки всех страниц команд
+  function loadAllPages(callback) {
+    const paginationRow = document.querySelector('form[name="page_forma"] + table td.lh18.txt2r');
+    if (!paginationRow) {
+      callback();
+      return;
+    }
+    
+    // Проверяем, есть ли пагинация
+    const pageLinks = paginationRow.querySelectorAll('a');
+    if (pageLinks.length === 0) {
+      callback();
+      return;
+    }
+    
+    // Получаем текущие параметры
+    const pageForm = document.querySelector('form[name="page_forma"]');
+    const day = pageForm.querySelector('input[name="day"]').value;
+    const sort = pageForm.querySelector('input[name="sort"]').value;
+    const natId = pageForm.querySelector('input[name="nat_id"]').value;
+    const typeFilter = pageForm.querySelector('input[name="type_filter"]').value;
+    
+    // Определяем количество страниц
+    const lastPageLink = pageLinks[pageLinks.length - 1];
+    const totalPages = parseInt(lastPageLink.textContent.trim()) || 1;
+    
+    if (totalPages <= 1) {
+      callback();
+      return;
+    }
+    
+    const sendForm = document.querySelector('form[name="send_forma"]');
+    const mainTable = sendForm.querySelector('table.tbl');
+    const tbody = mainTable.querySelector('tbody');
+    
+    // Показываем прогресс
+    const progressDiv = document.createElement('div');
+    progressDiv.style.cssText = 'position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff; padding:20px; border:2px solid #009900; z-index:10000; text-align:center;';
+    progressDiv.innerHTML = '<b>Загрузка всех команд...</b><br><span id="load-progress">Страница 1 из ' + totalPages + '</span>';
+    document.body.appendChild(progressDiv);
+    
+    let loadedPages = 1;
+    
+    // Загружаем остальные страницы
+    function loadPage(pageNum) {
+      if (pageNum > totalPages) {
+        document.body.removeChild(progressDiv);
+        // Удаляем все пагинации (сверху и снизу)
+        document.querySelectorAll('td.lh18.txt2r').forEach(td => {
+          if (td.textContent.includes('Страницы:')) {
+            td.textContent = '';
+          }
+        });
+        callback();
+        return;
+      }
+      
+      const url = `/mng_asktoplay.php?day=${day}&page=${pageNum}&sort=${sort}&nat_id=${natId}&type_filter=${typeFilter}`;
+      
+      httpGet(url, (_, html) => {
+        if (html) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const newRows = doc.querySelectorAll('form[name="send_forma"] table.tbl tr[id^="tr_send_"]');
+          
+          // Добавляем строки в текущую таблицу
+          newRows.forEach(row => {
+            tbody.appendChild(row.cloneNode(true));
+          });
+          
+          loadedPages++;
+          document.getElementById('load-progress').textContent = 'Страница ' + loadedPages + ' из ' + totalPages;
+        }
+        
+        loadPage(pageNum + 1);
+      });
+    }
+    
+    loadPage(2);
+  }
+
+  // Функция для добавления колонки "Школа" на странице mng_asktoplay.php
+  function enhanceAskToPlayPage() {
+    const sendForm = document.querySelector('form[name="send_forma"]');
+    if (!sendForm) return;
+    
+    const mainTable = sendForm.querySelector('table.tbl');
+    if (!mainTable) return;
+    
+    // Проверяем, не добавлена ли уже колонка "Школа"
+    if (mainTable.querySelector('.school-column-header')) return;
+    
+    // Сначала загружаем все страницы
+    loadAllPages(() => {
+      // После загрузки всех страниц добавляем фильтр и колонку школы
+      addSchoolFilter();
+    
+    // Работаем только с заголовками внутри send_forma
+    const headers = mainTable.querySelectorAll('tr[bgcolor="#006600"]');
+    
+    headers.forEach(header => {
+      // Проверяем, что это заголовок именно таблицы send_forma (есть колонка "⇔")
+      const hasInviteColumn = Array.from(header.querySelectorAll('td')).some(td => td.textContent.trim() === '⇔');
+      if (!hasInviteColumn) return;
+      
+      const th = document.createElement('td');
+      th.className = 'lh18 txtw qt school-column-header';
+      th.style.width = '30px';
+      th.title = 'Школа команды';
+      th.innerHTML = '<b>Шк</b>';
+      
+      const cells = Array.from(header.querySelectorAll('td'));
+      let idolCell = null;
+      for (let i = 0; i < cells.length; i++) {
+        const title = cells[i].getAttribute('title') || '';
+        const text = cells[i].textContent.trim();
+        if (title.includes('кумир') || text === 'К') {
+          idolCell = cells[i];
+          break;
+        }
+      }
+      
+      if (idolCell) {
+        idolCell.after(th);
+      } else {
+        const lastCell = cells[cells.length - 1];
+        if (lastCell) lastCell.before(th);
+      }
+    });
+    
+    // Работаем только со строками внутри send_forma, которые начинаются с tr_send_
+    const allRows = Array.from(mainTable.querySelectorAll('tr'));
+    const rows = allRows.filter(tr => tr.id && tr.id.startsWith('tr_send_'));
+    const jobs = [];
+    
+    rows.forEach(row => {
+      const teamIdMatch = row.id.match(/tr_send_(\d+)/);
+      if (!teamIdMatch) return;
+      
+      // Проверяем, не добавлена ли уже ячейка школы в эту строку
+      if (row.querySelector('.school-cell')) return;
+      
+      const teamId = teamIdMatch[1];
+      const cells = row.querySelectorAll('td');
+      
+      const schoolCell = document.createElement('td');
+      schoolCell.className = 'txt3 qt school-cell';
+      schoolCell.style.textAlign = 'center';
+      schoolCell.textContent = '...';
+      
+      const lastCell = cells[cells.length - 1];
+      if (lastCell) {
+        lastCell.before(schoolCell);
+        jobs.push({ teamId, cell: schoolCell });
+      }
+    });
+    
+    if (jobs.length) {
+      const MAX_PARALLEL = 3;
+      let active = 0;
+      let queue = jobs.slice();
+      
+      function work() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const job = queue.shift();
+          active++;
+          
+          fetchTeamSchool(job.teamId, (school) => {
+            job.cell.textContent = school || '-';
+            if (school === '☀️') {
+              job.cell.title = 'Солнечная школа (Д, Пк, Км)';
+              job.cell.style.backgroundColor = '#fffacd';
+            } else if (school === '🌧️') {
+              job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
+              job.cell.style.backgroundColor = '#e0f0ff';
+            }
+            
+            active--;
+            work();
+          });
+        }
+      }
+      
+      work();
+    }
+    });
+  }
+  
+  // Функция для добавления фильтра по школам
+  function addSchoolFilter() {
+    // Ищем строку с фильтрами - она находится перед формой send_forma
+    const filterRow = document.querySelector('form[name="page_forma"] + table td.lh18.txt2l');
+    if (!filterRow || document.getElementById('school-filter')) return;
+    
+    const filterSelect = document.createElement('select');
+    filterSelect.id = 'school-filter';
+    filterSelect.className = 'form2';
+    filterSelect.style.margin = '1px';
+    filterSelect.style.marginLeft = '10px';
+    filterSelect.innerHTML = `
+      <option value="">все школы</option>
+      <option value="☀️">☀️ солнечная</option>
+      <option value="🌧️">🌧️ дождевая</option>
+      <option value="-">без школы</option>
+    `;
+    
+    filterSelect.onchange = function() {
+      applySchoolFilter(this.value);
+    };
+    
+    const label = document.createElement('b');
+    label.textContent = ' Школа ';
+    label.style.marginLeft = '10px';
+    
+    filterRow.appendChild(label);
+    filterRow.appendChild(filterSelect);
+  }
+  
+  // Функция для применения фильтра по школам
+  function applySchoolFilter(schoolValue) {
+    const sendForm = document.querySelector('form[name="send_forma"]');
+    if (!sendForm) return;
+    
+    const mainTable = sendForm.querySelector('table.tbl');
+    if (!mainTable) return;
+    
+    const rows = Array.from(mainTable.querySelectorAll('tr')).filter(tr => tr.id && tr.id.startsWith('tr_send_'));
+    
+    rows.forEach(row => {
+      const schoolCell = row.querySelector('.school-cell');
+      if (!schoolCell) return;
+      
+      const cellValue = schoolCell.textContent.trim();
+      
+      if (!schoolValue) {
+        row.style.display = '';
+      } else if (schoolValue === '-' && cellValue === '-') {
+        row.style.display = '';
+      } else if (cellValue === schoolValue) {
+        row.style.display = '';
+      } else {
+        row.style.display = 'none';
+      }
+    });
+  }
+
+const href = location.href;
   if (href.includes('/roster_m.php')) {
     enhanceRosterMatchesPage();
   } else if (href.includes('/roster_s.php')) {
     enhanceRosterStatsPage();
+  }
+    else if (href.includes('/managerzone.php')) {
+        if(href.includes('pm=3')) {
+            enhanceRosterStatsPage();
+        }
+        else if(href.includes('pm=2')) {
+            enhanceRosterMatchesPage();
+        }
+  } else if (href.includes('/mng_asktoplay.php')) {
+    enhanceAskToPlayPage();
   }
 })();
