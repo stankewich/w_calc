@@ -2,7 +2,7 @@
 // @name         VSOL: weather and FWDs count
 // @license MIT
 // @namespace    http://tampermonkey.net/
-// @version      1.033
+// @version      1.0351
 // @description  Калькулятор статсы погоды, напов и определение школы команды
 // @author       community
 // @match        *://*.virtualsoccer.ru/roster_m.php*
@@ -31,10 +31,27 @@
 // @connect      vfliga.ru
 // @connect      vfliga.com
 // @run-at       document-end
+// @downloadURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.user.js
+// @updateURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.meta.js
 // ==/UserScript==
 
 (function() {
   'use strict';
+  
+  // Определение базового URL в зависимости от домена
+  const SITE_CONFIG = (() => {
+    const hostname = window.location.hostname;
+    let baseUrl = 'https://www.virtualsoccer.ru'; // default
+    if (hostname.includes('vfleague.com')) {
+      baseUrl = 'https://www.vfleague.com';
+    } else if (hostname.includes('vfliga.com')) {
+      baseUrl = 'https://www.vfliga.com';
+    } else if (hostname.includes('vfliga.ru')) {
+      baseUrl = 'https://www.vfliga.ru';
+    }
+    return { BASE_URL: baseUrl };
+  })();
+  
     const WEATHER_LABELS = [
         {key: 'очень жарко', icon: 6, koef: 0.8},
         {key: 'жарко',       icon: 0, koef: 0.9},
@@ -56,7 +73,7 @@
   }
   function setWeatherIcon(key) {
     const meta = WEATHER_SET[key];
-    return meta ? `https://www.virtualsoccer.ru/weather/weather_green${meta.icon}.svg` : '';
+    return meta ? `${SITE_CONFIG.BASE_URL}/weather/weather_green${meta.icon}.svg` : '';
   }
   function httpGet(url, cb) {
     GM_xmlhttpRequest({
@@ -267,7 +284,7 @@ container.innerHTML =
     };
 
 function fetchSeasonMatches(season, cb) {
-    const url = `https://www.virtualsoccer.ru/roster_m.php?num=${teamNum}&season=${season}`;
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamNum}&season=${season}`;
     httpGet(url, (_, html) => cb(html));
     }
 
@@ -361,7 +378,7 @@ function render() {
 }
 
   // Функция для определения школы по суммам спецвозможностей
-  function detectSchoolFromSums(sunnySum, rainySum) {
+  function detectSchool(sunnySum, rainySum) {
     const THRESHOLD = 30;
     
     if (sunnySum >= THRESHOLD && sunnySum > rainySum) return '☀️';
@@ -372,7 +389,7 @@ function render() {
   }
 
   // Функция для извлечения спецвозможностей из plrdat
-  function extractAbilitiesFromPlrdat(html) {
+  function extractAbilities(html) {
     const plrdatMatch = html.match(/var plrdat\s*=\s*\[(.*?)\];/s);
     if (!plrdatMatch) return null;
     
@@ -445,7 +462,7 @@ function render() {
       return;
     }
     
-    const url = `https://www.virtualsoccer.ru/roster.php?num=${teamId}`;
+    const url = `${SITE_CONFIG.BASE_URL}/roster.php?num=${teamId}`;
     
     httpGet(url, (_, html) => {
       if (!html) {
@@ -453,11 +470,11 @@ function render() {
         return;
       }
       
-      const abilitiesFromPlrdat = extractAbilitiesFromPlrdat(html);
-      if (abilitiesFromPlrdat) {
-        const sunnySum = abilitiesFromPlrdat.д + abilitiesFromPlrdat.пк + abilitiesFromPlrdat.км;
-        const rainySum = abilitiesFromPlrdat.г + abilitiesFromPlrdat.ск + abilitiesFromPlrdat.пд;
-        const school = detectSchoolFromSums(sunnySum, rainySum);
+      const abilities = extractAbilities(html);
+      if (abilities) {
+        const sunnySum = abilities.д + abilities.пк + abilities.км;
+        const rainySum = abilities.г + abilities.ск + abilities.пд;
+        const school = detectSchool(sunnySum, rainySum);
         
         // Сохраняем в кэш
         setSchoolCache(teamId, school);
