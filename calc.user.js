@@ -612,6 +612,18 @@ function render() {
     return count;
   }
 
+  // Загрузка и подсчёт автосоставов для команды
+  function fetchAutoRosterCount(teamId, season, callback) {
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamId}&season=${season}&filter=1`;
+    httpGet(url, (err, html) => {
+      if (err || !html) {
+        callback(0);
+        return;
+      }
+      callback(parseAutoRosterCount(html));
+    });
+  }
+
 
   // Функция для добавления колонки "Школа" на странице mng_asktoplay.php
   function enhanceAskToPlayPage() {
