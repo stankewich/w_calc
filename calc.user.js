@@ -489,6 +489,7 @@ function render() {
   function loadAllPages(callback) {
     const paginationRow = document.querySelector('form[name="page_forma"] + table td.lh18.txt2r');
     if (!paginationRow) {
+      console.log('[LoadAllPages] Пагинация не найдена (нет page_forma + table td.lh18.txt2r)');
       callback();
       return;
     }
@@ -496,9 +497,11 @@ function render() {
     // Проверяем, есть ли пагинация
     const pageLinks = paginationRow.querySelectorAll('a');
     if (pageLinks.length === 0) {
+      console.log('[LoadAllPages] Ссылки пагинации не найдены');
       callback();
       return;
     }
+    console.log(`[LoadAllPages] Найдено ссылок пагинации: ${pageLinks.length}`);
     
     // Получаем текущие параметры
     const pageForm = document.querySelector('form[name="page_forma"]');
