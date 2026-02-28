@@ -487,21 +487,29 @@ function render() {
 
   // Функция для загрузки всех страниц команд
   function loadAllPages(callback) {
-    const paginationRow = document.querySelector('form[name="page_forma"] + table td.lh18.txt2r');
-    if (!paginationRow) {
-      console.log('[LoadAllPages] Пагинация не найдена (нет page_forma + table td.lh18.txt2r)');
+    // Ищем select пагинации внутри таблицы после page_forma
+    const paginationTable = document.querySelector('form[name="page_forma"] + table');
+    if (!paginationTable) {
+      console.log('[LoadAllPages] Таблица пагинации не найдена');
       callback();
       return;
     }
-    
-    // Проверяем, есть ли пагинация
-    const pageLinks = paginationRow.querySelectorAll('a');
-    if (pageLinks.length === 0) {
-      console.log('[LoadAllPages] Ссылки пагинации не найдены');
+
+    const pageSelect = paginationTable.querySelector('select.form2[onchange*="changePage"]');
+    if (!pageSelect) {
+      console.log('[LoadAllPages] Select пагинации не найден');
       callback();
       return;
     }
-    console.log(`[LoadAllPages] Найдено ссылок пагинации: ${pageLinks.length}`);
+
+    const options = pageSelect.querySelectorAll('option');
+    const totalPages = options.length;
+    console.log(`[LoadAllPages] Найдено страниц: ${totalPages}`);
+
+    if (totalPages <= 1) {
+      callback();
+      return;
+    }
     
     // Получаем текущие параметры
     const pageForm = document.querySelector('form[name="page_forma"]');
@@ -509,15 +517,6 @@ function render() {
     const sort = pageForm.querySelector('input[name="sort"]').value;
     const natId = pageForm.querySelector('input[name="nat_id"]').value;
     const typeFilter = pageForm.querySelector('input[name="type_filter"]').value;
-    
-    // Определяем количество страниц
-    const lastPageLink = pageLinks[pageLinks.length - 1];
-    const totalPages = parseInt(lastPageLink.textContent.trim()) || 1;
-    
-    if (totalPages <= 1) {
-      callback();
-      return;
-    }
     
     const sendForm = document.querySelector('form[name="send_forma"]');
     const mainTable = sendForm.querySelector('table.tbl');
@@ -535,12 +534,17 @@ function render() {
     function loadPage(pageNum) {
       if (pageNum > totalPages) {
         document.body.removeChild(progressDiv);
-        // Удаляем все пагинации (сверху и снизу)
-        document.querySelectorAll('td.lh18.txt2r').forEach(td => {
-          if (td.textContent.includes('Страницы:')) {
-            td.textContent = '';
-          }
+        // Скрываем пагинацию после загрузки всех страниц
+        const paginationCells = document.querySelectorAll('td.lh18.txt2r');
+        paginationCells.forEach(td => {
+          td.style.display = 'none';
         });
+        // Обновляем текст "Показаны с 1 по 50" → "Показаны все"
+        const infoCell = document.querySelector('td.lh18.txt2l');
+        if (infoCell) {
+          infoCell.innerHTML = infoCell.innerHTML.replace(/Показаны с \d+ по \d+/, 'Показаны все');
+        }
+        console.log(`[LoadAllPages] Все ${totalPages} страниц загружены`);
         callback();
         return;
       }
