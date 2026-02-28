@@ -606,26 +606,35 @@ function render() {
   function parseAutoRosterCount(html) {
     if (!html) return 0;
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    const table = doc.querySelector('table.tbl');
-    if (!table) { console.warn('[AutoRoster:parse] table.tbl не найдена'); return 0; }
+    const tables = doc.querySelectorAll('table.tbl');
+    if (!tables.length) { console.warn('[AutoRoster:parse] table.tbl не найдена'); return 0; }
 
-    const headerRow = table.querySelector('tr[bgcolor="#006600"]');
-    if (!headerRow) { console.warn('[AutoRoster:parse] tr[bgcolor="#006600"] не найден'); return 0; }
-    const headerCells = headerRow.querySelectorAll('td');
-    const headerTexts = Array.from(headerCells).map(td => td.textContent.trim());
-    console.log('[AutoRoster:parse] Заголовки:', headerTexts.join(' | '));
+    // Ищем таблицу, в заголовке которой есть колонка «А»
+    let targetTable = null;
     let colIndex = -1;
-    for (let i = 0; i < headerCells.length; i++) {
-      if (headerCells[i].textContent.trim() === 'А') {
-        colIndex = i;
-        break;
+    for (const table of tables) {
+      const headerRow = table.querySelector('tr[bgcolor="#006600"]');
+      if (!headerRow) continue;
+      const headerCells = headerRow.querySelectorAll('td');
+      for (let i = 0; i < headerCells.length; i++) {
+        if (headerCells[i].textContent.trim() === 'А') {
+          targetTable = table;
+          colIndex = i;
+          break;
+        }
       }
+      if (targetTable) break;
     }
-    if (colIndex === -1) { console.warn('[AutoRoster:parse] Колонка «А» не найдена среди заголовков'); return 0; }
+
+    if (!targetTable || colIndex === -1) {
+      console.warn('[AutoRoster:parse] Колонка «А» не найдена ни в одной table.tbl');
+      return 0;
+    }
     console.log(`[AutoRoster:parse] Колонка «А» найдена, index=${colIndex}`);
 
+    const headerRow = targetTable.querySelector('tr[bgcolor="#006600"]');
     let count = 0;
-    const allRows = table.querySelectorAll('tr');
+    const allRows = targetTable.querySelectorAll('tr');
     for (const row of allRows) {
       if (row === headerRow) continue;
       const cells = row.querySelectorAll('td');
