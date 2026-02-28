@@ -581,6 +581,37 @@ function render() {
     return null;
   }
 
+  // Парсинг HTML страницы roster_m.php и подсчёт '*' в колонке 'А'
+  function parseAutoRosterCount(html) {
+    if (!html) return 0;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const table = doc.querySelector('table.tbl');
+    if (!table) return 0;
+
+    const headerRow = table.querySelector('tr[bgcolor="#006600"]');
+    if (!headerRow) return 0;
+    const headerCells = headerRow.querySelectorAll('td');
+    let colIndex = -1;
+    for (let i = 0; i < headerCells.length; i++) {
+      if (headerCells[i].textContent.trim() === 'А') {
+        colIndex = i;
+        break;
+      }
+    }
+    if (colIndex === -1) return 0;
+
+    let count = 0;
+    const allRows = table.querySelectorAll('tr');
+    for (const row of allRows) {
+      if (row === headerRow) continue;
+      const cells = row.querySelectorAll('td');
+      if (cells.length > colIndex && cells[colIndex].textContent.trim() === '*') {
+        count++;
+      }
+    }
+    return count;
+  }
+
 
   // Функция для добавления колонки "Школа" на странице mng_asktoplay.php
   function enhanceAskToPlayPage() {
