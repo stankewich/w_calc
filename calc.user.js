@@ -566,19 +566,33 @@ function render() {
     loadPage(2);
   }
 
-  // Определение текущего сезона из страницы
-  function getCurrentSeason() {
-    // Вариант 1: из ссылки на roster_m.php с параметром season=
-    const link = document.querySelector('a[href*="roster_m.php"][href*="season="]');
-    if (link) {
-      const match = link.href.match(/season=(\d+)/);
-      if (match) return match[1];
+  // Определение текущего сезона через загрузку roster_m.php первой команды
+  function getCurrentSeason(callback) {
+    const firstTeamRow = document.querySelector('tr[id^="tr_send_"]');
+    if (!firstTeamRow) {
+      console.warn('[AutoRoster] Нет строк команд для определения сезона');
+      callback(null);
+      return;
     }
-    // Вариант 2: из текста страницы (например "Сезон 75")
-    const bodyText = document.body.textContent;
-    const seasonMatch = bodyText.match(/[Сс]езон\s*(\d+)/);
-    if (seasonMatch) return seasonMatch[1];
-    return null;
+    const teamId = firstTeamRow.id.match(/tr_send_(\d+)/)?.[1];
+    if (!teamId) { callback(null); return; }
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamId}`;
+    console.log(`[AutoRoster] Определяем сезон через roster_m.php team=${teamId}`);
+    httpGet(url, (err, html) => {
+      if (err || !html) {
+        console.warn('[AutoRoster] Ошибка загрузки roster_m.php для определения сезона');
+        callback(null);
+        return;
+      }
+      const match = html.match(/season=(\d+)/);
+      if (match) {
+        console.log(`[AutoRoster] Сезон: ${match[1]}`);
+        callback(match[1]);
+      } else {
+        console.warn('[AutoRoster] Сезон не найден в roster_m.php');
+        callback(null);
+      }
+    });
   }
 
   // Парсинг HTML страницы roster_m.php и подсчёт '*' в колонке 'А'
@@ -740,7 +754,7 @@ function render() {
       console.log('[AutoRoster] Колонка уже добавлена, пропуск');
       return;
     }
-    const season = getCurrentSeason();
+    getCurrentSeason((season) => {
     if (!season) {
       console.warn('[AutoRoster] Сезон не определён, колонка «Авт» не добавлена');
       return;
@@ -804,6 +818,7 @@ function render() {
       }
       processAutoQueue();
     }
+    }); // getCurrentSeason callback
     });
   }
   
