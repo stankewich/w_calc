@@ -566,6 +566,22 @@ function render() {
     loadPage(2);
   }
 
+  // Определение текущего сезона из страницы
+  function getCurrentSeason() {
+    // Вариант 1: из ссылки на roster_m.php с параметром season=
+    const link = document.querySelector('a[href*="roster_m.php"][href*="season="]');
+    if (link) {
+      const match = link.href.match(/season=(\d+)/);
+      if (match) return match[1];
+    }
+    // Вариант 2: из текста страницы (например "Сезон 75")
+    const bodyText = document.body.textContent;
+    const seasonMatch = bodyText.match(/[Сс]езон\s*(\d+)/);
+    if (seasonMatch) return seasonMatch[1];
+    return null;
+  }
+
+
   // Функция для добавления колонки "Школа" на странице mng_asktoplay.php
   function enhanceAskToPlayPage() {
     const sendForm = document.querySelector('form[name="send_forma"]');
