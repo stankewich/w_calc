@@ -615,12 +615,16 @@ function render() {
   // Загрузка и подсчёт автосоставов для команды
   function fetchAutoRosterCount(teamId, season, callback) {
     const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamId}&season=${season}&filter=1`;
+    console.log(`[AutoRoster] Загрузка team=${teamId} season=${season}`);
     httpGet(url, (err, html) => {
       if (err || !html) {
+        console.warn(`[AutoRoster] Ошибка загрузки team=${teamId}:`, err);
         callback(0);
         return;
       }
-      callback(parseAutoRosterCount(html));
+      const count = parseAutoRosterCount(html);
+      console.log(`[AutoRoster] team=${teamId} → автосоставов: ${count}`);
+      callback(count);
     });
   }
 
@@ -732,9 +736,16 @@ function render() {
 
     // === Колонка «Авт» (автосоставы) ===
     // 5.1 Проверка идемпотентности и определение сезона
-    if (mainTable.querySelector('.auto-roster-header')) return;
+    if (mainTable.querySelector('.auto-roster-header')) {
+      console.log('[AutoRoster] Колонка уже добавлена, пропуск');
+      return;
+    }
     const season = getCurrentSeason();
-    if (!season) return;
+    if (!season) {
+      console.warn('[AutoRoster] Сезон не определён, колонка «Авт» не добавлена');
+      return;
+    }
+    console.log(`[AutoRoster] Сезон: ${season}, добавляем колонку «Авт»`);
 
     // 5.2 Добавить заголовок «Авт» в строку заголовков
     headers.forEach(header => {
@@ -766,8 +777,10 @@ function render() {
 
     // 5.4 Параллельная загрузка данных с ограничением MAX_PARALLEL
     if (autoRosterJobs.length) {
+      console.log(`[AutoRoster] Запуск загрузки для ${autoRosterJobs.length} команд`);
       const MAX_PARALLEL_AUTO = 3;
       let activeAuto = 0;
+      let doneAuto = 0;
       const autoQueue = autoRosterJobs.slice();
 
       function processAutoQueue() {
@@ -781,6 +794,10 @@ function render() {
               job.cell.title = `Автосоставов: ${count}`;
             }
             activeAuto--;
+            doneAuto++;
+            if (doneAuto === autoRosterJobs.length) {
+              console.log(`[AutoRoster] Загрузка завершена: ${doneAuto} команд обработано`);
+            }
             processAutoQueue();
           });
         }
