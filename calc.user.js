@@ -649,7 +649,7 @@ function render() {
 
   // Загрузка и подсчёт автосоставов для команды
   function fetchAutoRosterCount(teamId, season, callback) {
-    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamId}&season=${season}&filter=1`;
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamId}&season=${season}&pm=1&filter=1`;
     console.log(`[AutoRoster] Загрузка team=${teamId} season=${season}`);
     httpGet(url, (err, html) => {
       if (err || !html) {
