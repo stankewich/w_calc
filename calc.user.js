@@ -729,6 +729,64 @@ function render() {
       
       work();
     }
+
+    // === Колонка «Авт» (автосоставы) ===
+    // 5.1 Проверка идемпотентности и определение сезона
+    if (mainTable.querySelector('.auto-roster-header')) return;
+    const season = getCurrentSeason();
+    if (!season) return;
+
+    // 5.2 Добавить заголовок «Авт» в строку заголовков
+    headers.forEach(header => {
+      const schoolHeader = header.querySelector('.school-column-header');
+      if (!schoolHeader) return;
+      const autoTh = document.createElement('td');
+      autoTh.className = 'lh18 txtw qt auto-roster-header';
+      autoTh.style.width = '30px';
+      autoTh.title = 'Количество автосоставов';
+      autoTh.innerHTML = '<b>Авт</b>';
+      schoolHeader.after(autoTh);
+    });
+
+    // 5.3 Создать ячейки «...» для каждой строки команды
+    const autoRosterJobs = [];
+    rows.forEach(row => {
+      const teamIdMatch = row.id.match(/tr_send_(\d+)/);
+      if (!teamIdMatch) return;
+      const teamId = teamIdMatch[1];
+      const schoolCell = row.querySelector('.school-cell');
+      if (!schoolCell) return;
+      const autoCell = document.createElement('td');
+      autoCell.className = 'txt3 qt auto-roster-cell';
+      autoCell.style.textAlign = 'center';
+      autoCell.textContent = '...';
+      schoolCell.after(autoCell);
+      autoRosterJobs.push({ teamId, cell: autoCell });
+    });
+
+    // 5.4 Параллельная загрузка данных с ограничением MAX_PARALLEL
+    if (autoRosterJobs.length) {
+      const MAX_PARALLEL_AUTO = 3;
+      let activeAuto = 0;
+      const autoQueue = autoRosterJobs.slice();
+
+      function processAutoQueue() {
+        while (activeAuto < MAX_PARALLEL_AUTO && autoQueue.length) {
+          const job = autoQueue.shift();
+          activeAuto++;
+          fetchAutoRosterCount(job.teamId, season, (count) => {
+            job.cell.textContent = count > 0 ? count.toString() : '0';
+            if (count > 0) {
+              job.cell.style.backgroundColor = '#ffe0e0';
+              job.cell.title = `Автосоставов: ${count}`;
+            }
+            activeAuto--;
+            processAutoQueue();
+          });
+        }
+      }
+      processAutoQueue();
+    }
     });
   }
   
