@@ -607,11 +607,13 @@ function render() {
     if (!html) return 0;
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const table = doc.querySelector('table.tbl');
-    if (!table) return 0;
+    if (!table) { console.warn('[AutoRoster:parse] table.tbl не найдена'); return 0; }
 
     const headerRow = table.querySelector('tr[bgcolor="#006600"]');
-    if (!headerRow) return 0;
+    if (!headerRow) { console.warn('[AutoRoster:parse] tr[bgcolor="#006600"] не найден'); return 0; }
     const headerCells = headerRow.querySelectorAll('td');
+    const headerTexts = Array.from(headerCells).map(td => td.textContent.trim());
+    console.log('[AutoRoster:parse] Заголовки:', headerTexts.join(' | '));
     let colIndex = -1;
     for (let i = 0; i < headerCells.length; i++) {
       if (headerCells[i].textContent.trim() === 'А') {
@@ -619,17 +621,20 @@ function render() {
         break;
       }
     }
-    if (colIndex === -1) return 0;
+    if (colIndex === -1) { console.warn('[AutoRoster:parse] Колонка «А» не найдена среди заголовков'); return 0; }
+    console.log(`[AutoRoster:parse] Колонка «А» найдена, index=${colIndex}`);
 
     let count = 0;
     const allRows = table.querySelectorAll('tr');
     for (const row of allRows) {
       if (row === headerRow) continue;
       const cells = row.querySelectorAll('td');
-      if (cells.length > colIndex && cells[colIndex].textContent.trim() === '*') {
-        count++;
+      if (cells.length > colIndex) {
+        const cellText = cells[colIndex].textContent.trim();
+        if (cellText === '*') count++;
       }
     }
+    console.log(`[AutoRoster:parse] Результат: ${count} автосоставов`);
     return count;
   }
 
