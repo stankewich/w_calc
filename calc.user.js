@@ -2,7 +2,7 @@
 // @name         VSOL: weather and FWDs count
 // @license MIT
 // @namespace    http://tampermonkey.net/
-// @version      1.0351
+// @version      1.0352
 // @description  Калькулятор статсы погоды, напов и определение школы команды
 // @author       community
 // @match        *://*.virtualsoccer.ru/roster_m.php*
@@ -112,30 +112,24 @@
     const key = getWeatherKey(weatherText);
     return key;
   }
-  function getFwds(url, is_home, cell) {
-    fetch(url).then(response => response.text()).then(function (text) {
-        const parser = new DOMParser();
-        var page = parser.parseFromString(text, "text/html");
-        var tbls = page.getElementsByClassName("tbl");
-        var tbl = is_home ? tbls[0] : tbls[1];
-        if (!tbl) { cell.textContent = "N/A"; return; }
-        var rows = tbl.getElementsByTagName("tr");
-        if (rows.length < 2) { cell.textContent = "N/A"; return; }
-        var fwds = 0;
-        for (var i = 1; i < rows.length; i++) {
-        var columns = rows[i].getElementsByTagName("td");
-        if (!columns.length) continue;
-        var span = columns[0].getElementsByTagName("span");
-        if (!span.length) continue;
-        var position = span[0].innerText;
-        switch (position) {
-            case "LW": case "LF": case "CF": case "ST": case "RW": case "RF": case "AM":
-            fwds += 1; break;
-        }
+  function parseFwdsFromHtml(doc, is_home) {
+    const tbls = doc.getElementsByClassName("tbl");
+    const tbl = is_home ? tbls[0] : tbls[1];
+    if (!tbl) return null;
+    const rows = tbl.getElementsByTagName("tr");
+    if (rows.length < 2) return null;
+    let fwds = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const columns = rows[i].getElementsByTagName("td");
+      if (!columns.length) continue;
+      const span = columns[0].getElementsByTagName("span");
+      if (!span.length) continue;
+      switch (span[0].innerText) {
+        case "LW": case "LF": case "CF": case "ST": case "RW": case "RF": case "AM":
+          fwds++; break;
+      }
     }
-        cell.textContent = fwds;
-        cell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
-    }).catch(() => { cell.textContent = "Err"; });
+    return fwds;
   }
   function enhanceRosterMatchesPage() {
     const mainTables = Array.from(document.querySelectorAll('table.tbl'));
@@ -162,74 +156,76 @@
     let stageIndex = -1;
     const headerTds = headers[0]?.querySelectorAll('td');
     if (headerTds) {
-    for (let i = 0; i < headerTds.length; i++) {
-        if (/Стадия/i.test(headerTds[i].textContent)) {
-        stageIndex = i;
-        break;
-        }
+      for (let i = 0; i < headerTds.length; i++) {
+        if (/Стадия/i.test(headerTds[i].textContent)) { stageIndex = i; break; }
       }
     }
     if (stageIndex === -1) return;
-    const jobsWeather = [];
-    const jobsFwds = [];
+    const jobs = [];
     const rows = Array.from(matchesTable.querySelectorAll('tr')).filter(tr => tr.getAttribute('bgcolor') !== '#006600');
     rows.forEach(tr => {
-    if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
-    if (tr.querySelector('table')) return;
-    const tds = tr.querySelectorAll('td');
-    if (tds.length <= stageIndex + 1) return;
-    const resultTd = tds[stageIndex + 1];
-    if (!resultTd.hasAttribute('title')) return;
-    if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
-    const tdWeather = document.createElement('td');
-    tdWeather.className = 'lh16 txt weather_match';
-    tdWeather.style.textAlign = 'center';
-    tr.appendChild(tdWeather);
-    const tdFwds = document.createElement('td');
-    tdFwds.className = 'lh16 txt fwds_match';
-    tdFwds.style.textAlign = 'center';
-    tr.appendChild(tdFwds);
-    let matchLink = null;
-    for (let i = 0; i < tds.length; i++) {
+      if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
+      if (tr.querySelector('table')) return;
+      const tds = tr.querySelectorAll('td');
+      if (tds.length <= stageIndex + 1) return;
+      const resultTd = tds[stageIndex + 1];
+      if (!resultTd.hasAttribute('title')) return;
+      if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
+      const tdWeather = document.createElement('td');
+      tdWeather.className = 'lh16 txt weather_match';
+      tdWeather.style.textAlign = 'center';
+      tr.appendChild(tdWeather);
+      const tdFwds = document.createElement('td');
+      tdFwds.className = 'lh16 txt fwds_match';
+      tdFwds.style.textAlign = 'center';
+      tr.appendChild(tdFwds);
+      let matchLink = null;
+      for (let i = 0; i < tds.length; i++) {
         const a = tds[i].querySelector('a[href*="viewmatch.php"]');
         if (a) { matchLink = a.href; break; }
-    }
-    if (matchLink) {
-        jobsWeather.push({ url: matchLink, cell: tdWeather });
+      }
+      if (matchLink) {
         const is_home = tds[5]?.innerText.trim() === "Д";
-        jobsFwds.push({ url: matchLink, is_home, cell: tdFwds });
+        jobs.push({ url: matchLink, is_home, weatherCell: tdWeather, fwdsCell: tdFwds });
       }
     });
-    if (jobsWeather.length) {
-    const MAX_PARALLEL = 5;
-    let active = 0, queue = jobsWeather.slice();
-    function work() {
-    while (active < MAX_PARALLEL && queue.length) {
-            const job = queue.shift();
-            active++;
-            httpGet(job.url, (_, html) => {
-            let key = null;
-            if (html) key = parseWeatherFromMatch(html);
-            const icon = key ? setWeatherIcon(key) : '';
-            const label = key || '';
-            const koef = key ? (WEATHER_SET[key]?.koef ?? '') : '';
-            const title = key ? (koef ? `${label} (Кф: ${koef})` : label) : '';
-            if (icon) {
-            job.cell.innerHTML = `<img src="${icon}" style="height:14px" alt="${label}">`;
-            job.cell.title = title; // нативная подсказка
+    if (jobs.length) {
+      const MAX_PARALLEL = 5;
+      let active = 0;
+      const queue = jobs.slice();
+      function work() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const job = queue.shift();
+          active++;
+          httpGet(job.url, (_, html) => {
+            if (html) {
+              // Погода
+              const key = parseWeatherFromMatch(html);
+              if (key) {
+                const icon = setWeatherIcon(key);
+                const koef = WEATHER_SET[key]?.koef ?? '';
+                const title = koef ? `${key} (Кф: ${koef})` : key;
+                job.weatherCell.innerHTML = `<img src="${icon}" style="height:14px" alt="${key}">`;
+                job.weatherCell.title = title;
+              }
+              // Нападающие — парсим из того же HTML
+              const doc = new DOMParser().parseFromString(html, 'text/html');
+              const fwds = parseFwdsFromHtml(doc, job.is_home);
+              if (fwds !== null) {
+                job.fwdsCell.textContent = fwds;
+                job.fwdsCell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
+              } else {
+                job.fwdsCell.textContent = "N/A";
+              }
             } else {
-            job.cell.innerHTML = '';
-            job.cell.removeAttribute('title');
+              job.fwdsCell.textContent = "Err";
             }
             active--;
             work();
-        });
+          });
         }
-    }
+      }
       work();
-    }
-    if (jobsFwds.length) {
-    jobsFwds.forEach(job => getFwds(job.url, job.is_home, job.cell));
     }
   }
 
@@ -487,60 +483,65 @@ function render() {
 
   // Функция для загрузки всех страниц команд
   function loadAllPages(callback) {
-    // Ищем select пагинации внутри таблицы после page_forma
-    const paginationTable = document.querySelector('form[name="page_forma"] + table');
-    if (!paginationTable) {
-      console.log('[LoadAllPages] Таблица пагинации не найдена');
+    // Ищем ссылки пагинации changePage(N) внутри div_opp
+    const divOpp = document.getElementById('div_opp');
+    if (!divOpp) {
+      console.log('[LoadAllPages] div_opp не найден');
       callback();
       return;
     }
 
-    const pageSelect = paginationTable.querySelector('select.form2[onchange*="changePage"]');
-    if (!pageSelect) {
-      console.log('[LoadAllPages] Select пагинации не найден');
+    // Собираем номера страниц из onclick="changePage(N)"
+    const pageLinks = divOpp.querySelectorAll('a[onclick*="changePage"]');
+    const pageNums = new Set();
+    pageLinks.forEach(a => {
+      const m = a.getAttribute('onclick').match(/changePage\((\d+)\)/);
+      if (m) pageNums.add(parseInt(m[1], 10));
+    });
+
+    if (!pageNums.size) {
+      // Нет дополнительных страниц — пагинации нет или одна страница
+      console.log('[LoadAllPages] Пагинация не найдена или одна страница');
       callback();
       return;
     }
 
-    const options = pageSelect.querySelectorAll('option');
-    const totalPages = options.length;
+    const totalPages = Math.max(...pageNums, 1);
     console.log(`[LoadAllPages] Найдено страниц: ${totalPages}`);
 
-    if (totalPages <= 1) {
-      callback();
-      return;
-    }
-    
     // Получаем текущие параметры
     const pageForm = document.querySelector('form[name="page_forma"]');
-    const day = pageForm.querySelector('input[name="day"]').value;
-    const sort = pageForm.querySelector('input[name="sort"]').value;
-    const natId = pageForm.querySelector('input[name="nat_id"]').value;
-    const typeFilter = pageForm.querySelector('input[name="type_filter"]').value;
-    
+    if (!pageForm) { callback(); return; }
+    const day = pageForm.querySelector('input[name="day"]')?.value || '';
+    const sort = pageForm.querySelector('input[name="sort"]')?.value || '1';
+    const natId = pageForm.querySelector('input[name="nat_id"]')?.value || '0';
+    const typeFilter = pageForm.querySelector('input[name="type_filter"]')?.value || '1';
+
     const sendForm = document.querySelector('form[name="send_forma"]');
-    const mainTable = sendForm.querySelector('table.tbl');
-    const tbody = mainTable.querySelector('tbody');
-    
+    const mainTable = sendForm?.querySelector('table.tbl');
+    if (!mainTable) { callback(); return; }
+
+    // Находим последний tbody или сам mainTable для вставки строк
+    const lastHeaderRow = mainTable.querySelectorAll('tr[bgcolor="#006600"]');
+    const bottomHeader = lastHeaderRow.length > 1 ? lastHeaderRow[lastHeaderRow.length - 1] : null;
+
     // Показываем прогресс
     const progressDiv = document.createElement('div');
     progressDiv.style.cssText = 'position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:#fff; padding:20px; border:2px solid #009900; z-index:10000; text-align:center;';
     progressDiv.innerHTML = '<b>Загрузка всех команд...</b><br><span id="load-progress">Страница 1 из ' + totalPages + '</span>';
     document.body.appendChild(progressDiv);
-    
+
     let loadedPages = 1;
-    
-    // Загружаем остальные страницы
+
+    // Загружаем остальные страницы последовательно
     function loadPage(pageNum) {
       if (pageNum > totalPages) {
         document.body.removeChild(progressDiv);
         // Скрываем пагинацию после загрузки всех страниц
-        const paginationCells = document.querySelectorAll('td.lh18.txt2r');
-        paginationCells.forEach(td => {
-          td.style.display = 'none';
-        });
+        const paginationCells = divOpp.querySelectorAll('td.lh18.txt2r');
+        paginationCells.forEach(td => { td.style.display = 'none'; });
         // Обновляем текст "Показаны с 1 по 50" → "Показаны все"
-        const infoCell = document.querySelector('td.lh18.txt2l');
+        const infoCell = divOpp.querySelector('td.lh18.txt2l');
         if (infoCell) {
           infoCell.innerHTML = infoCell.innerHTML.replace(/Показаны с \d+ по \d+/, 'Показаны все');
         }
@@ -548,28 +549,33 @@ function render() {
         callback();
         return;
       }
-      
+
       const url = `/mng_asktoplay.php?day=${day}&page=${pageNum}&sort=${sort}&nat_id=${natId}&type_filter=${typeFilter}`;
-      
+
       httpGet(url, (_, html) => {
         if (html) {
-          const parser = new DOMParser();
-          const doc = parser.parseFromString(html, 'text/html');
+          const doc = new DOMParser().parseFromString(html, 'text/html');
           const newRows = doc.querySelectorAll('form[name="send_forma"] table.tbl tr[id^="tr_send_"]');
-          
-          // Добавляем строки в текущую таблицу
+
+          // Вставляем строки перед нижним заголовком (если есть), иначе в конец таблицы
           newRows.forEach(row => {
-            tbody.appendChild(row.cloneNode(true));
+            const cloned = row.cloneNode(true);
+            if (bottomHeader) {
+              bottomHeader.parentNode.insertBefore(cloned, bottomHeader);
+            } else {
+              mainTable.querySelector('tbody')?.appendChild(cloned) || mainTable.appendChild(cloned);
+            }
           });
-          
+
           loadedPages++;
-          document.getElementById('load-progress').textContent = 'Страница ' + loadedPages + ' из ' + totalPages;
+          const prog = document.getElementById('load-progress');
+          if (prog) prog.textContent = 'Страница ' + loadedPages + ' из ' + totalPages;
         }
-        
+
         loadPage(pageNum + 1);
       });
     }
-    
+
     loadPage(2);
   }
 
@@ -664,183 +670,145 @@ function render() {
   }
 
 
-  // Функция для добавления колонки "Школа" на странице mng_asktoplay.php
+  // Функция для добавления колонок "Школа" и "Авт" на странице mng_asktoplay.php
   function enhanceAskToPlayPage() {
     const sendForm = document.querySelector('form[name="send_forma"]');
     if (!sendForm) return;
-    
+
     const mainTable = sendForm.querySelector('table.tbl');
     if (!mainTable) return;
-    
-    // Проверяем, не добавлена ли уже колонка "Школа"
+
+    // Проверяем, не добавлены ли уже колонки
     if (mainTable.querySelector('.school-column-header')) return;
-    
-    // Сначала загружаем все страницы
+
+    // Сначала загружаем все страницы, потом определяем сезон, потом обогащаем таблицу
     loadAllPages(() => {
-      // После загрузки всех страниц добавляем фильтр и колонку школы
       addSchoolFilter();
-    
-    // Работаем только с заголовками внутри send_forma
-    const headers = mainTable.querySelectorAll('tr[bgcolor="#006600"]');
-    
-    headers.forEach(header => {
-      // Проверяем, что это заголовок именно таблицы send_forma (есть колонка "⇔")
-      const hasInviteColumn = Array.from(header.querySelectorAll('td')).some(td => td.textContent.trim() === '⇔');
-      if (!hasInviteColumn) return;
-      
-      const th = document.createElement('td');
-      th.className = 'lh18 txtw qt school-column-header';
-      th.style.width = '30px';
-      th.title = 'Школа команды';
-      th.innerHTML = '<b>Шк</b>';
-      
-      const cells = Array.from(header.querySelectorAll('td'));
-      let idolCell = null;
-      for (let i = 0; i < cells.length; i++) {
-        const title = cells[i].getAttribute('title') || '';
-        const text = cells[i].textContent.trim();
-        if (title.includes('кумир') || text === 'К') {
-          idolCell = cells[i];
-          break;
-        }
-      }
-      
-      if (idolCell) {
-        idolCell.after(th);
-      } else {
-        const lastCell = cells[cells.length - 1];
-        if (lastCell) lastCell.before(th);
-      }
-    });
-    
-    // Работаем только со строками внутри send_forma, которые начинаются с tr_send_
-    const allRows = Array.from(mainTable.querySelectorAll('tr'));
-    const rows = allRows.filter(tr => tr.id && tr.id.startsWith('tr_send_'));
-    const jobs = [];
-    
-    rows.forEach(row => {
-      const teamIdMatch = row.id.match(/tr_send_(\d+)/);
-      if (!teamIdMatch) return;
-      
-      // Проверяем, не добавлена ли уже ячейка школы в эту строку
-      if (row.querySelector('.school-cell')) return;
-      
-      const teamId = teamIdMatch[1];
-      const cells = row.querySelectorAll('td');
-      
-      const schoolCell = document.createElement('td');
-      schoolCell.className = 'txt3 qt school-cell';
-      schoolCell.style.textAlign = 'center';
-      schoolCell.textContent = '...';
-      
-      const lastCell = cells[cells.length - 1];
-      if (lastCell) {
-        lastCell.before(schoolCell);
-        jobs.push({ teamId, cell: schoolCell });
-      }
-    });
-    
-    if (jobs.length) {
-      const MAX_PARALLEL = 3;
-      let active = 0;
-      let queue = jobs.slice();
-      
-      function work() {
-        while (active < MAX_PARALLEL && queue.length) {
-          const job = queue.shift();
-          active++;
-          
-          fetchTeamSchool(job.teamId, (school) => {
-            job.cell.textContent = school || '-';
-            if (school === '☀️') {
-              job.cell.title = 'Солнечная школа (Д, Пк, Км)';
-              job.cell.style.backgroundColor = '#fffacd';
-            } else if (school === '🌧️') {
-              job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
-              job.cell.style.backgroundColor = '#e0f0ff';
+
+      // Определяем сезон до создания ячеек, чтобы сразу добавить обе колонки
+      getCurrentSeason((season) => {
+        const hasAutoColumn = !!season;
+
+        // === Заголовки ===
+        const headers = mainTable.querySelectorAll('tr[bgcolor="#006600"]');
+        headers.forEach(header => {
+          const hasInviteColumn = Array.from(header.querySelectorAll('td')).some(td => td.textContent.trim() === '⇔');
+          if (!hasInviteColumn) return;
+
+          // Находим ячейку «К» (кумиры) для вставки после неё
+          const cells = Array.from(header.querySelectorAll('td'));
+          let idolCell = null;
+          for (const c of cells) {
+            if ((c.getAttribute('title') || '').includes('кумир') || c.textContent.trim() === 'К') {
+              idolCell = c;
+              break;
             }
-            
-            active--;
-            work();
-          });
-        }
-      }
-      
-      work();
-    }
+          }
 
-    // === Колонка «Авт» (автосоставы) ===
-    // 5.1 Проверка идемпотентности и определение сезона
-    if (mainTable.querySelector('.auto-roster-header')) {
-      console.log('[AutoRoster] Колонка уже добавлена, пропуск');
-      return;
-    }
-    getCurrentSeason((season) => {
-    if (!season) {
-      console.warn('[AutoRoster] Сезон не определён, колонка «Авт» не добавлена');
-      return;
-    }
-    console.log(`[AutoRoster] Сезон: ${season}, добавляем колонку «Авт»`);
+          const thSchool = document.createElement('td');
+          thSchool.className = 'lh18 txtw qt school-column-header';
+          thSchool.style.width = '30px';
+          thSchool.title = 'Школа команды';
+          thSchool.innerHTML = '<b>Шк</b>';
 
-    // 5.2 Добавить заголовок «Авт» в строку заголовков
-    headers.forEach(header => {
-      const schoolHeader = header.querySelector('.school-column-header');
-      if (!schoolHeader) return;
-      const autoTh = document.createElement('td');
-      autoTh.className = 'lh18 txtw qt auto-roster-header';
-      autoTh.style.width = '30px';
-      autoTh.title = 'Количество автосоставов';
-      autoTh.innerHTML = '<b>Авт</b>';
-      schoolHeader.after(autoTh);
-    });
+          if (idolCell) idolCell.after(thSchool);
+          else { const last = cells[cells.length - 1]; if (last) last.before(thSchool); }
 
-    // 5.3 Создать ячейки «...» для каждой строки команды
-    const autoRosterJobs = [];
-    rows.forEach(row => {
-      const teamIdMatch = row.id.match(/tr_send_(\d+)/);
-      if (!teamIdMatch) return;
-      const teamId = teamIdMatch[1];
-      const schoolCell = row.querySelector('.school-cell');
-      if (!schoolCell) return;
-      const autoCell = document.createElement('td');
-      autoCell.className = 'txt3 qt auto-roster-cell';
-      autoCell.style.textAlign = 'center';
-      autoCell.textContent = '...';
-      schoolCell.after(autoCell);
-      autoRosterJobs.push({ teamId, cell: autoCell });
-    });
+          if (hasAutoColumn) {
+            const thAuto = document.createElement('td');
+            thAuto.className = 'lh18 txtw qt auto-roster-header';
+            thAuto.style.width = '30px';
+            thAuto.title = 'Количество автосоставов';
+            thAuto.innerHTML = '<b>Авт</b>';
+            thSchool.after(thAuto);
+          }
+        });
 
-    // 5.4 Параллельная загрузка данных с ограничением MAX_PARALLEL
-    if (autoRosterJobs.length) {
-      console.log(`[AutoRoster] Запуск загрузки для ${autoRosterJobs.length} команд`);
-      const MAX_PARALLEL_AUTO = 3;
-      let activeAuto = 0;
-      let doneAuto = 0;
-      const autoQueue = autoRosterJobs.slice();
+        // === Строки команд — создаём ячейки ===
+        const rows = Array.from(mainTable.querySelectorAll('tr')).filter(tr => tr.id && tr.id.startsWith('tr_send_'));
+        const jobs = [];
 
-      function processAutoQueue() {
-        while (activeAuto < MAX_PARALLEL_AUTO && autoQueue.length) {
-          const job = autoQueue.shift();
-          activeAuto++;
-          fetchAutoRosterCount(job.teamId, season, (count) => {
-            job.cell.textContent = count > 0 ? count.toString() : '0';
-            if (count > 0) {
-              job.cell.style.backgroundColor = '#ffe0e0';
-              job.cell.title = `Автосоставов: ${count}`;
+        rows.forEach(row => {
+          const teamIdMatch = row.id.match(/tr_send_(\d+)/);
+          if (!teamIdMatch || row.querySelector('.school-cell')) return;
+          const teamId = teamIdMatch[1];
+          const cells = row.querySelectorAll('td');
+          const lastCell = cells[cells.length - 1];
+          if (!lastCell) return;
+
+          const schoolCell = document.createElement('td');
+          schoolCell.className = 'txt3 qt school-cell';
+          schoolCell.style.textAlign = 'center';
+          schoolCell.textContent = '...';
+          lastCell.before(schoolCell);
+
+          let autoCell = null;
+          if (hasAutoColumn) {
+            autoCell = document.createElement('td');
+            autoCell.className = 'txt3 qt auto-roster-cell';
+            autoCell.style.textAlign = 'center';
+            autoCell.textContent = '...';
+            schoolCell.after(autoCell);
+          }
+
+          jobs.push({ teamId, schoolCell, autoCell });
+        });
+
+        // === Единый параллельный проход: школа + автосоставы одновременно ===
+        if (jobs.length) {
+          const MAX_PARALLEL = 5;
+          let active = 0;
+          const queue = jobs.slice();
+          let done = 0;
+
+          function pump() {
+            while (active < MAX_PARALLEL && queue.length) {
+              const job = queue.shift();
+              active++;
+              let pending = hasAutoColumn ? 2 : 1;
+
+              function jobDone() {
+                pending--;
+                if (pending === 0) {
+                  active--;
+                  done++;
+                  if (done === jobs.length) {
+                    console.log(`[Enhance] Все ${done} команд обработаны`);
+                  }
+                  pump();
+                }
+              }
+
+              // Запрос школы
+              fetchTeamSchool(job.teamId, (school) => {
+                job.schoolCell.textContent = school || '-';
+                if (school === '☀️') {
+                  job.schoolCell.title = 'Солнечная школа (Д, Пк, Км)';
+                  job.schoolCell.style.backgroundColor = '#fffacd';
+                } else if (school === '🌧️') {
+                  job.schoolCell.title = 'Дождевая школа (Г, Ск, Пд)';
+                  job.schoolCell.style.backgroundColor = '#e0f0ff';
+                }
+                jobDone();
+              });
+
+              // Запрос автосоставов (параллельно с школой)
+              if (hasAutoColumn) {
+                fetchAutoRosterCount(job.teamId, season, (count) => {
+                  job.autoCell.textContent = count > 0 ? count.toString() : '0';
+                  if (count > 0) {
+                    job.autoCell.style.backgroundColor = '#ffe0e0';
+                    job.autoCell.title = `Автосоставов: ${count}`;
+                  }
+                  jobDone();
+                });
+              }
             }
-            activeAuto--;
-            doneAuto++;
-            if (doneAuto === autoRosterJobs.length) {
-              console.log(`[AutoRoster] Загрузка завершена: ${doneAuto} команд обработано`);
-            }
-            processAutoQueue();
-          });
+          }
+          pump();
         }
-      }
-      processAutoQueue();
-    }
-    }); // getCurrentSeason callback
-    });
+      }); // getCurrentSeason
+    }); // loadAllPages
   }
   
   // Функция для добавления фильтра по школам
