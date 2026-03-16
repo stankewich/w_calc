@@ -5,6 +5,10 @@
 // @version      1.0352
 // @description  Калькулятор статсы погоды, напов и определение школы команды
 // @author       community
+// @match        *://*.virtualsoccer.ru/roster.php*
+// @match        *://*.vfleague.com/roster.php*
+// @match        *://*.vfliga.ru/roster.php*
+// @match        *://*.vfliga.com/roster.php*
 // @match        *://*.virtualsoccer.ru/roster_m.php*
 // @match        *://*.vfleague.com/roster_m.php*
 // @match        *://*.vfliga.ru/roster_m.php*
@@ -79,9 +83,18 @@
     GM_xmlhttpRequest({
     method: "GET",
     url,
-    onload: r => cb(null, r.responseText),
-    onerror: e => cb(e, null),
-    ontimeout: e => cb(e, null)
+    timeout: 30000,
+    onload: r => {
+      console.log(`[httpGet] ${url} → status=${r.status}, length=${(r.responseText||'').length}`);
+      if (r.status >= 200 && r.status < 400) {
+        cb(null, r.responseText);
+      } else {
+        console.warn(`[httpGet] HTTP error: ${r.status} for ${url}`);
+        cb(new Error(`HTTP ${r.status}`), null);
+      }
+    },
+    onerror: e => { console.error(`[httpGet] onerror: ${url}`, e); cb(e, null); },
+    ontimeout: () => { console.error(`[httpGet] timeout: ${url}`); cb(new Error('timeout'), null); }
     });
   }
   function parseWeatherFromMatch(html) {
@@ -114,34 +127,42 @@
   }
   function parseFwdsFromHtml(doc, is_home) {
     const tbls = doc.getElementsByClassName("tbl");
+    console.log(`[parseFwds] tables found: ${tbls.length}, is_home: ${is_home}`);
     const tbl = is_home ? tbls[0] : tbls[1];
-    if (!tbl) return null;
+    if (!tbl) { console.warn('[parseFwds] target table not found'); return null; }
     const rows = tbl.getElementsByTagName("tr");
-    if (rows.length < 2) return null;
+    if (rows.length < 2) { console.warn(`[parseFwds] too few rows: ${rows.length}`); return null; }
     let fwds = 0;
     for (let i = 1; i < rows.length; i++) {
       const columns = rows[i].getElementsByTagName("td");
       if (!columns.length) continue;
       const span = columns[0].getElementsByTagName("span");
       if (!span.length) continue;
-      switch (span[0].innerText) {
+      const pos = span[0].textContent.trim();
+      switch (pos) {
         case "LW": case "LF": case "CF": case "ST": case "RW": case "RF": case "AM":
           fwds++; break;
       }
     }
+    console.log(`[parseFwds] result: ${fwds}`);
     return fwds;
   }
-  function enhanceRosterMatchesPage() {
+  function enhanceRosterMatchesPage(forceRefresh) {
+    console.log(`[RosterMatches] start, forceRefresh=${!!forceRefresh}`);
     const mainTables = Array.from(document.querySelectorAll('table.tbl'));
+    console.log(`[RosterMatches] table.tbl count: ${mainTables.length}`);
     if (!mainTables.length) return;
     let matchesTable = null;
     for (const t of mainTables) {
         const header = t.querySelector('tr[bgcolor="#006600"]');
         if (header && /Дата/i.test(header.textContent)) { matchesTable = t; break; }
     }
-    if (!matchesTable) return;
+    if (!matchesTable) { console.warn('[RosterMatches] matchesTable not found'); return; }
     const headers = matchesTable.querySelectorAll('tr[bgcolor="#006600"]');
-    headers.forEach(h => {
+
+    // Добавляем заголовки и кнопку только при первом запуске
+    if (!matchesTable.querySelector('.weather_match')) {
+      headers.forEach(h => {
         const th1 = document.createElement('td');
         th1.className = 'lh18 txtw';
         th1.style.whiteSpace = 'nowrap';
@@ -152,7 +173,22 @@
         th2.style.whiteSpace = 'nowrap';
         th2.innerHTML = '<b>Нпд</b>';
         h.appendChild(th2);
-    });
+      });
+
+      // Кнопка «Обновить» рядом с таблицей
+      const refreshBtn = document.createElement('button');
+      refreshBtn.textContent = '🔄 Обновить Пгд/Нпд';
+      refreshBtn.style.cssText = 'margin:6px 0; padding:3px 10px; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;';
+      refreshBtn.onclick = () => {
+        clearMatchCache();
+        // Очищаем старые данные из ячеек
+        matchesTable.querySelectorAll('.weather_match').forEach(td => { td.innerHTML = ''; td.removeAttribute('title'); });
+        matchesTable.querySelectorAll('.fwds_match').forEach(td => { td.textContent = ''; td.style.backgroundColor = ''; });
+        enhanceRosterMatchesPage(true);
+      };
+      matchesTable.parentNode.insertBefore(refreshBtn, matchesTable);
+    }
+
     let stageIndex = -1;
     const headerTds = headers[0]?.querySelectorAll('td');
     if (headerTds) {
@@ -160,9 +196,12 @@
         if (/Стадия/i.test(headerTds[i].textContent)) { stageIndex = i; break; }
       }
     }
-    if (stageIndex === -1) return;
+    if (stageIndex === -1) { console.warn('[RosterMatches] stageIndex not found'); return; }
+
+    const cache = forceRefresh ? {} : getMatchCache();
     const jobs = [];
     const rows = Array.from(matchesTable.querySelectorAll('tr')).filter(tr => tr.getAttribute('bgcolor') !== '#006600');
+    console.log(`[RosterMatches] candidate rows: ${rows.length}`);
     rows.forEach(tr => {
       if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
       if (tr.querySelector('table')) return;
@@ -171,57 +210,97 @@
       const resultTd = tds[stageIndex + 1];
       if (!resultTd.hasAttribute('title')) return;
       if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
-      const tdWeather = document.createElement('td');
-      tdWeather.className = 'lh16 txt weather_match';
-      tdWeather.style.textAlign = 'center';
-      tr.appendChild(tdWeather);
-      const tdFwds = document.createElement('td');
-      tdFwds.className = 'lh16 txt fwds_match';
-      tdFwds.style.textAlign = 'center';
-      tr.appendChild(tdFwds);
+
+      // Находим или создаём ячейки
+      let tdWeather = tr.querySelector('.weather_match');
+      let tdFwds = tr.querySelector('.fwds_match');
+      if (!tdWeather) {
+        tdWeather = document.createElement('td');
+        tdWeather.className = 'lh16 txt weather_match';
+        tdWeather.style.textAlign = 'center';
+        tr.appendChild(tdWeather);
+      }
+      if (!tdFwds) {
+        tdFwds = document.createElement('td');
+        tdFwds.className = 'lh16 txt fwds_match';
+        tdFwds.style.textAlign = 'center';
+        tr.appendChild(tdFwds);
+      }
+
       let matchLink = null;
       for (let i = 0; i < tds.length; i++) {
         const a = tds[i].querySelector('a[href*="viewmatch.php"]');
         if (a) { matchLink = a.href; break; }
       }
-      if (matchLink) {
-        const is_home = tds[5]?.innerText.trim() === "Д";
+      if (!matchLink) return;
+
+      const is_home = tds[5]?.innerText.trim() === "Д";
+
+      // Проверяем кэш
+      const cached = cache[matchLink];
+      if (cached) {
+        console.log(`[RosterMatches] cache hit: ${matchLink}`);
+        if (cached.weather) {
+          const icon = setWeatherIcon(cached.weather);
+          const koef = WEATHER_SET[cached.weather]?.koef ?? '';
+          const title = koef ? `${cached.weather} (Кф: ${koef})` : cached.weather;
+          tdWeather.innerHTML = `<img src="${icon}" style="height:14px" alt="${cached.weather}">`;
+          tdWeather.title = title;
+        }
+        const fwds = is_home ? cached.fwdsHome : cached.fwdsAway;
+        if (fwds !== null && fwds !== undefined) {
+          tdFwds.textContent = fwds;
+          tdFwds.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
+        } else {
+          tdFwds.textContent = "N/A";
+        }
+      } else {
         jobs.push({ url: matchLink, is_home, weatherCell: tdWeather, fwdsCell: tdFwds });
       }
     });
+    console.log(`[RosterMatches] cache hits: ${rows.length - jobs.length}, jobs to fetch: ${jobs.length}`);
     if (jobs.length) {
-      const MAX_PARALLEL = 5;
+      const MAX_PARALLEL = 3;
+      const MAX_RETRIES = 2;
+      const DELAY_MS = 300;
       let active = 0;
-      const queue = jobs.slice();
+      const queue = jobs.map(j => ({ ...j, retries: 0 }));
       function work() {
         while (active < MAX_PARALLEL && queue.length) {
           const job = queue.shift();
           active++;
-          httpGet(job.url, (_, html) => {
+          httpGet(job.url, (err, html) => {
+            console.log(`[RosterMatches] fetched ${job.url}, err=${!!err}, html=${!!html}, retry=${job.retries}`);
             if (html) {
+              const data = parseMatchData(html);
+              // Кэшируем
+              setMatchCache(job.url, data.weather, data.fwdsHome, data.fwdsAway);
               // Погода
-              const key = parseWeatherFromMatch(html);
-              if (key) {
-                const icon = setWeatherIcon(key);
-                const koef = WEATHER_SET[key]?.koef ?? '';
-                const title = koef ? `${key} (Кф: ${koef})` : key;
-                job.weatherCell.innerHTML = `<img src="${icon}" style="height:14px" alt="${key}">`;
+              if (data.weather) {
+                const icon = setWeatherIcon(data.weather);
+                const koef = WEATHER_SET[data.weather]?.koef ?? '';
+                const title = koef ? `${data.weather} (Кф: ${koef})` : data.weather;
+                job.weatherCell.innerHTML = `<img src="${icon}" style="height:14px" alt="${data.weather}">`;
                 job.weatherCell.title = title;
               }
-              // Нападающие — парсим из того же HTML
-              const doc = new DOMParser().parseFromString(html, 'text/html');
-              const fwds = parseFwdsFromHtml(doc, job.is_home);
+              // Нападающие
+              const fwds = job.is_home ? data.fwdsHome : data.fwdsAway;
               if (fwds !== null) {
                 job.fwdsCell.textContent = fwds;
                 job.fwdsCell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
               } else {
                 job.fwdsCell.textContent = "N/A";
               }
+            } else if (job.retries < MAX_RETRIES) {
+              job.retries++;
+              console.log(`[RosterMatches] retry #${job.retries} for ${job.url}`);
+              queue.push(job);
             } else {
               job.fwdsCell.textContent = "Err";
+              job.weatherCell.textContent = "—";
             }
             active--;
-            work();
+            setTimeout(work, DELAY_MS);
           });
         }
       }
@@ -478,6 +557,124 @@ function render() {
       } else {
         callback('');
       }
+    });
+  }
+
+  // Кэш данных матчей (погода + Нпд)
+  const MATCH_CACHE_KEY = 'vsol_match_data';
+  const MATCH_CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 1 день
+
+  function getMatchCache() {
+    try {
+      const cached = localStorage.getItem(MATCH_CACHE_KEY);
+      if (!cached) return {};
+      const data = JSON.parse(cached);
+      const now = Date.now();
+      Object.keys(data).forEach(key => {
+        if (now - data[key].time > MATCH_CACHE_EXPIRY) delete data[key];
+      });
+      return data;
+    } catch { return {}; }
+  }
+
+  function setMatchCache(matchUrl, weather, fwdsHome, fwdsAway) {
+    try {
+      const cache = getMatchCache();
+      cache[matchUrl] = { weather, fwdsHome, fwdsAway, time: Date.now() };
+      localStorage.setItem(MATCH_CACHE_KEY, JSON.stringify(cache));
+    } catch {}
+  }
+
+  function clearMatchCache() {
+    try { localStorage.removeItem(MATCH_CACHE_KEY); } catch {}
+  }
+
+  // Парсинг одного матча: погода + Нпд для обеих сторон
+  function parseMatchData(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const weather = parseWeatherFromMatch(html);
+    const fwdsHome = parseFwdsFromHtml(doc, true);
+    const fwdsAway = parseFwdsFromHtml(doc, false);
+    return { weather, fwdsHome, fwdsAway };
+  }
+
+  // Предзагрузка матчей при открытии roster.php
+  function prefetchMatchData() {
+    const teamNum = (location.search.match(/num=(\d+)/) || [])[1];
+    if (!teamNum) return;
+
+    // Загружаем roster_m.php этой команды
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamNum}`;
+    console.log(`[Prefetch] Загружаем roster_m для team=${teamNum}`);
+
+    httpGet(url, (err, html) => {
+      if (err || !html) { console.warn('[Prefetch] Ошибка загрузки roster_m'); return; }
+
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const allRows = Array.from(doc.querySelectorAll('table.tbl tr'));
+
+      // Ищем индекс колонки «Стадия»
+      let stageIndex = -1;
+      const headerRow = doc.querySelector('table.tbl tr[bgcolor="#006600"]');
+      if (headerRow) {
+        const hCells = headerRow.querySelectorAll('td');
+        for (let i = 0; i < hCells.length; i++) {
+          if (/Стадия/i.test(hCells[i].textContent)) { stageIndex = i; break; }
+        }
+      }
+
+      // Собираем ссылки на сыгранные матчи
+      const matchLinks = [];
+      const cache = getMatchCache();
+      for (const row of allRows) {
+        if (row.getAttribute('bgcolor') === '#006600') continue;
+        if (row.getAttribute('bgcolor')?.toUpperCase() === '#FFEEEE') continue;
+        if (row.querySelector('table')) continue;
+        const tds = row.querySelectorAll('td');
+        if (stageIndex >= 0 && tds.length > stageIndex + 1) {
+          const resultTd = tds[stageIndex + 1];
+          if (!resultTd?.hasAttribute('title')) continue;
+          if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') continue;
+        }
+        for (const td of tds) {
+          const a = td.querySelector('a[href*="viewmatch.php"]');
+          if (a) {
+            const href = a.href || a.getAttribute('href');
+            const fullUrl = href.startsWith('http') ? href : `${SITE_CONFIG.BASE_URL}${href.startsWith('/') ? '' : '/'}${href}`;
+            if (!cache[fullUrl]) matchLinks.push(fullUrl);
+            break;
+          }
+        }
+      }
+
+      if (!matchLinks.length) {
+        console.log('[Prefetch] Все матчи уже в кэше или нет сыгранных');
+        return;
+      }
+
+      console.log(`[Prefetch] Матчей для загрузки: ${matchLinks.length}`);
+      const MAX_PARALLEL = 2;
+      const DELAY_MS = 500;
+      let active = 0, done = 0;
+      const queue = matchLinks.slice();
+
+      function pump() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const matchUrl = queue.shift();
+          active++;
+          httpGet(matchUrl, (e, mHtml) => {
+            if (mHtml) {
+              const data = parseMatchData(mHtml);
+              setMatchCache(matchUrl, data.weather, data.fwdsHome, data.fwdsAway);
+            }
+            active--;
+            done++;
+            console.log(`[Prefetch] ${done}/${matchLinks.length} done`);
+            setTimeout(pump, DELAY_MS);
+          });
+        }
+      }
+      pump();
     });
   }
 
@@ -870,7 +1067,9 @@ function render() {
   }
 
 const href = location.href;
-  if (href.includes('/roster_m.php')) {
+  if (href.includes('/roster.php') && !href.includes('/roster_m.php') && !href.includes('/roster_s.php')) {
+    prefetchMatchData();
+  } else if (href.includes('/roster_m.php')) {
     enhanceRosterMatchesPage();
   } else if (href.includes('/roster_s.php')) {
     enhanceRosterStatsPage();
