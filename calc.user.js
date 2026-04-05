@@ -1086,7 +1086,7 @@ function render() {
     const summary = document.createElement('table');
     summary.id = 'vsol-fed-summary';
     summary.className = 'tbl';
-    summary.style.cssText = 'margin:6px 0; width:260px; font-size:12px; font-family:Arial,sans-serif; border-collapse:collapse;';
+    summary.style.cssText = 'margin:6px auto; width:260px; font-size:12px; font-family:Arial,sans-serif; border-collapse:collapse;';
     summary.innerHTML =
       `<tbody>` +
       `<tr bgcolor="#006600"><td class="lh18 txtw" colspan="2" style="text-align:center; padding:4px 8px"><b>Школы команд (<span id="vsol-fed-done">0</span> из <span id="vsol-fed-total">0</span>)</b></td></tr>` +
