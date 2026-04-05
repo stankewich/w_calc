@@ -458,7 +458,7 @@ function render() {
 
   // Функция для определения школы по суммам спецвозможностей
   function detectSchool(sunnySum, rainySum) {
-    const THRESHOLD = 30;
+    const THRESHOLD = 10;
     
     if (sunnySum >= THRESHOLD && sunnySum > rainySum) return '☀️';
     if (rainySum >= THRESHOLD && rainySum > sunnySum) return '🌧️';
