@@ -87,7 +87,7 @@
     GM_xmlhttpRequest({
     method: "GET",
     url,
-    timeout: 30000,
+    timeout: 45000,
     onload: r => {
       console.log(`[httpGet] ${url} → status=${r.status}, length=${(r.responseText||'').length}`);
       if (r.status >= 200 && r.status < 400) {
@@ -1161,32 +1161,40 @@ function render() {
       }
       updateSummary();
 
-      const MAX_PARALLEL = 3;
-      const DELAY_MS = 200;
+      const MAX_PARALLEL = 1;
+      const DELAY_MS = 500;
+      const MAX_RETRIES = 2;
       let active = 0;
-      const queue = jobs.slice();
+      const queue = jobs.map(j => ({ ...j, retries: 0 }));
 
       function pump() {
         while (active < MAX_PARALLEL && queue.length) {
           const job = queue.shift();
           active++;
           fetchTeamSchool(job.teamId, (school) => {
-            job.cell.textContent = school || '-';
-            if (school === '☀️') {
-              job.cell.title = 'Солнечная школа (Д, Пк, Км)';
-              job.cell.style.backgroundColor = '#fffacd';
-              stats.sun++;
-            } else if (school === '🌧️') {
-              job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
-              job.cell.style.backgroundColor = '#e0f0ff';
-              stats.rain++;
+            if (school === '' && job.retries < MAX_RETRIES) {
+              // Пустой результат может быть таймаутом — retry
+              job.retries++;
+              queue.push(job);
+              job.cell.textContent = `... (${job.retries})`;
             } else {
-              stats.none++;
+              job.cell.textContent = school || '-';
+              if (school === '☀️') {
+                job.cell.title = 'Солнечная школа (Д, Пк, Км)';
+                job.cell.style.backgroundColor = '#fffacd';
+                stats.sun++;
+              } else if (school === '🌧️') {
+                job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
+                job.cell.style.backgroundColor = '#e0f0ff';
+                stats.rain++;
+              } else {
+                stats.none++;
+              }
+              done++;
+              updateSummary();
             }
             active--;
-            done++;
-            updateSummary();
-            if (done < jobs.length) setTimeout(pump, DELAY_MS);
+            setTimeout(pump, DELAY_MS);
           });
         }
       }
