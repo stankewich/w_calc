@@ -543,25 +543,23 @@ function render() {
     
     const url = `${SITE_CONFIG.BASE_URL}/roster.php?num=${teamId}`;
     
-    httpGet(url, (_, html) => {
-      if (!html) {
-        callback('');
-        return;
-      }
-      
-      const abilities = extractAbilities(html);
-      if (abilities) {
-        const sunnySum = abilities.д + abilities.пк + abilities.км;
-        const rainySum = abilities.г + abilities.ск + abilities.пд;
-        const school = detectSchool(sunnySum, rainySum);
-        
-        // Сохраняем в кэш
-        setSchoolCache(teamId, school);
-        callback(school);
-      } else {
-        callback('');
-      }
-    });
+    // fetch() вместо GM_xmlhttpRequest — запрос идёт от имени страницы
+    // с правильными куками, referer и origin (неотличимо от навигации)
+    fetch(url, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.text() : Promise.reject(r.status))
+      .then(html => {
+        const abilities = extractAbilities(html);
+        if (abilities) {
+          const sunnySum = abilities.д + abilities.пк + abilities.км;
+          const rainySum = abilities.г + abilities.ск + abilities.пд;
+          const school = detectSchool(sunnySum, rainySum);
+          setSchoolCache(teamId, school);
+          callback(school);
+        } else {
+          callback('');
+        }
+      })
+      .catch(() => callback(''));
   }
 
   // Кэш данных матчей (погода + Нпд)
