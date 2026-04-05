@@ -29,6 +29,10 @@
 // @match        *://*.vfleague.com/mng_asktoplay.php*
 // @match        *://*.vfliga.ru/mng_asktoplay.php*
 // @match        *://*.vfliga.com/mng_asktoplay.php*
+// @match        *://*.virtualsoccer.ru/teams_cntr.php*
+// @match        *://*.vfleague.com/teams_cntr.php*
+// @match        *://*.vfliga.ru/teams_cntr.php*
+// @match        *://*.vfliga.com/teams_cntr.php*
 // @grant        GM_xmlhttpRequest
 // @connect      virtualsoccer.ru
 // @connect      vfleague.com
@@ -1066,6 +1070,99 @@ function render() {
     });
   }
 
+  // Функция для добавления колонки "Школа" на странице teams_cntr.php (список команд федерации)
+  function enhanceFederationTeamsPage() {
+    const mainTables = document.querySelectorAll('table.tbl');
+    if (!mainTables.length) return;
+
+    // Ищем таблицу с заголовком "Название команды"
+    let teamsTable = null;
+    for (const t of mainTables) {
+      const header = t.querySelector('tr[bgcolor="#006600"]');
+      if (header && /Название команды/i.test(header.textContent)) { teamsTable = t; break; }
+    }
+    if (!teamsTable) return;
+
+    // Добавляем заголовок «Шк» во все строки заголовков
+    const headers = teamsTable.querySelectorAll('tr[bgcolor="#006600"]');
+    headers.forEach(h => {
+      const th = document.createElement('td');
+      th.className = 'lh18 txtw qt';
+      th.style.width = '25px';
+      th.title = 'Школа команды';
+      th.innerHTML = '<b>Шк</b>';
+      h.appendChild(th);
+    });
+
+    // Собираем строки команд с ссылками на ростер
+    const allRows = Array.from(teamsTable.querySelectorAll('tr')).filter(tr => !tr.getAttribute('bgcolor'));
+    const jobs = [];
+
+    allRows.forEach(row => {
+      const rosterLink = row.querySelector('a[href*="roster.php?num="]');
+      if (!rosterLink) return;
+      const m = rosterLink.href.match(/num=(\d+)/);
+      if (!m) return;
+      const teamId = m[1];
+
+      const cell = document.createElement('td');
+      cell.className = 'lh18 txt school-fed-cell';
+      cell.style.textAlign = 'center';
+      cell.textContent = '...';
+      row.appendChild(cell);
+
+      jobs.push({ teamId, cell });
+    });
+
+    if (!jobs.length) return;
+
+    // Параллельная загрузка школ
+    const MAX_PARALLEL = 3;
+    const DELAY_MS = 200;
+    let active = 0, done = 0;
+    const queue = jobs.slice();
+    const stats = { sun: 0, rain: 0, none: 0 };
+
+    function pump() {
+      while (active < MAX_PARALLEL && queue.length) {
+        const job = queue.shift();
+        active++;
+        fetchTeamSchool(job.teamId, (school) => {
+          job.cell.textContent = school || '-';
+          if (school === '☀️') {
+            job.cell.title = 'Солнечная школа (Д, Пк, Км)';
+            job.cell.style.backgroundColor = '#fffacd';
+            stats.sun++;
+          } else if (school === '🌧️') {
+            job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
+            job.cell.style.backgroundColor = '#e0f0ff';
+            stats.rain++;
+          } else {
+            stats.none++;
+          }
+          active--;
+          done++;
+          if (done === jobs.length) renderFedSummary(stats, teamsTable);
+          else setTimeout(pump, DELAY_MS);
+        });
+      }
+    }
+    pump();
+  }
+
+  function renderFedSummary(stats, table) {
+    const total = stats.sun + stats.rain + stats.none;
+    const summary = document.createElement('div');
+    summary.style.cssText = 'margin:10px 0; padding:8px 12px; border:1px solid #009900; background:#f8fff8; font-size:12px; font-family:Arial,sans-serif;';
+    summary.innerHTML =
+      `<b>Школы команд федерации:</b> ` +
+      `☀️ Солнечная: <b>${stats.sun}</b> ` +
+      `| 🌧️ Дождевая: <b>${stats.rain}</b> ` +
+      `| Без школы: <b>${stats.none}</b> ` +
+      `| Всего: <b>${total}</b>`;
+    table.parentNode.insertBefore(summary, table.nextSibling);
+  }
+
 const href = location.href;
   if (href.includes('/roster.php') && !href.includes('/roster_m.php') && !href.includes('/roster_s.php')) {
     prefetchMatchData();
@@ -1083,5 +1180,7 @@ const href = location.href;
         }
   } else if (href.includes('/mng_asktoplay.php')) {
     enhanceAskToPlayPage();
+  } else if (href.includes('/teams_cntr.php')) {
+    enhanceFederationTeamsPage();
   }
 })();
