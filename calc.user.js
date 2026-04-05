@@ -1075,7 +1075,6 @@ function render() {
     const mainTables = document.querySelectorAll('table.tbl');
     if (!mainTables.length) return;
 
-    // Ищем таблицу с заголовком "Название команды"
     let teamsTable = null;
     for (const t of mainTables) {
       const header = t.querySelector('tr[bgcolor="#006600"]');
@@ -1083,84 +1082,121 @@ function render() {
     }
     if (!teamsTable) return;
 
-    // Добавляем заголовок «Шк» во все строки заголовков
-    const headers = teamsTable.querySelectorAll('tr[bgcolor="#006600"]');
-    headers.forEach(h => {
-      const th = document.createElement('td');
-      th.className = 'lh18 txtw qt';
-      th.style.width = '25px';
-      th.title = 'Школа команды';
-      th.innerHTML = '<b>Шк</b>';
-      h.appendChild(th);
-    });
+    // === Сводка ПЕРЕД таблицей, горизонтальная ===
+    const summary = document.createElement('div');
+    summary.id = 'vsol-fed-summary';
+    summary.style.cssText = 'margin:6px 0; padding:6px 12px; border:1px solid #009900; background:#f8fff8; font-size:12px; font-family:Arial,sans-serif; display:flex; align-items:center; gap:12px; flex-wrap:wrap;';
+    summary.innerHTML =
+      `<span style="font-weight:700">Школы:</span>` +
+      `<span>☀️ <b id="vsol-fed-sun">0</b></span>` +
+      `<span>🌧️ <b id="vsol-fed-rain">0</b></span>` +
+      `<span>— <b id="vsol-fed-none">0</b></span>` +
+      `<span style="color:#888">из <b id="vsol-fed-total">0</b></span>` +
+      `<span id="vsol-fed-progress" style="color:#999; font-size:11px"></span>` +
+      `<button id="vsol-fed-refresh" style="margin-left:auto; padding:2px 10px; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;">🔄 Пересчитать</button>`;
+    teamsTable.parentNode.insertBefore(summary, teamsTable);
 
-    // Собираем строки команд с ссылками на ростер
-    const allRows = Array.from(teamsTable.querySelectorAll('tr')).filter(tr => !tr.getAttribute('bgcolor'));
-    const jobs = [];
-
-    allRows.forEach(row => {
-      const rosterLink = row.querySelector('a[href*="roster.php?num="]');
-      if (!rosterLink) return;
-      const m = rosterLink.href.match(/num=(\d+)/);
-      if (!m) return;
-      const teamId = m[1];
-
-      const cell = document.createElement('td');
-      cell.className = 'lh18 txt school-fed-cell';
-      cell.style.textAlign = 'center';
-      cell.textContent = '...';
-      row.appendChild(cell);
-
-      jobs.push({ teamId, cell });
-    });
-
-    if (!jobs.length) return;
-
-    // Параллельная загрузка школ
-    const MAX_PARALLEL = 3;
-    const DELAY_MS = 200;
-    let active = 0, done = 0;
-    const queue = jobs.slice();
-    const stats = { sun: 0, rain: 0, none: 0 };
-
-    function pump() {
-      while (active < MAX_PARALLEL && queue.length) {
-        const job = queue.shift();
-        active++;
-        fetchTeamSchool(job.teamId, (school) => {
-          job.cell.textContent = school || '-';
-          if (school === '☀️') {
-            job.cell.title = 'Солнечная школа (Д, Пк, Км)';
-            job.cell.style.backgroundColor = '#fffacd';
-            stats.sun++;
-          } else if (school === '🌧️') {
-            job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
-            job.cell.style.backgroundColor = '#e0f0ff';
-            stats.rain++;
-          } else {
-            stats.none++;
-          }
-          active--;
-          done++;
-          if (done === jobs.length) renderFedSummary(stats, teamsTable);
-          else setTimeout(pump, DELAY_MS);
+    function runSchoolScan(forceRefresh) {
+      // Добавляем заголовок «Шк» если ещё нет
+      const headers = teamsTable.querySelectorAll('tr[bgcolor="#006600"]');
+      if (!teamsTable.querySelector('.school-fed-header')) {
+        headers.forEach(h => {
+          const th = document.createElement('td');
+          th.className = 'lh18 txtw qt school-fed-header';
+          th.style.width = '25px';
+          th.title = 'Школа команды';
+          th.innerHTML = '<b>Шк</b>';
+          h.appendChild(th);
         });
       }
-    }
-    pump();
-  }
 
-  function renderFedSummary(stats, table) {
-    const total = stats.sun + stats.rain + stats.none;
-    const summary = document.createElement('div');
-    summary.style.cssText = 'margin:10px 0; padding:8px 12px; border:1px solid #009900; background:#f8fff8; font-size:12px; font-family:Arial,sans-serif;';
-    summary.innerHTML =
-      `<b>Школы команд федерации:</b> ` +
-      `☀️ Солнечная: <b>${stats.sun}</b> ` +
-      `| 🌧️ Дождевая: <b>${stats.rain}</b> ` +
-      `| Без школы: <b>${stats.none}</b> ` +
-      `| Всего: <b>${total}</b>`;
-    table.parentNode.insertBefore(summary, table.nextSibling);
+      // Собираем строки команд
+      const allRows = Array.from(teamsTable.querySelectorAll('tr')).filter(tr => !tr.getAttribute('bgcolor'));
+      const jobs = [];
+
+      allRows.forEach(row => {
+        const rosterLink = row.querySelector('a[href*="roster.php?num="]');
+        if (!rosterLink) return;
+        const m = rosterLink.href.match(/num=(\d+)/);
+        if (!m) return;
+        const teamId = m[1];
+
+        let cell = row.querySelector('.school-fed-cell');
+        if (!cell) {
+          cell = document.createElement('td');
+          cell.className = 'lh18 txt school-fed-cell';
+          cell.style.textAlign = 'center';
+          row.appendChild(cell);
+        }
+        cell.textContent = '...';
+        cell.style.backgroundColor = '';
+        cell.removeAttribute('title');
+
+        jobs.push({ teamId, cell });
+      });
+
+      if (!jobs.length) return;
+
+      // Сбрасываем кэш при пересчёте
+      if (forceRefresh) {
+        try { localStorage.removeItem(CACHE_KEY); } catch {}
+      }
+
+      // Обновляем сводку
+      const elSun = document.getElementById('vsol-fed-sun');
+      const elRain = document.getElementById('vsol-fed-rain');
+      const elNone = document.getElementById('vsol-fed-none');
+      const elTotal = document.getElementById('vsol-fed-total');
+      const elProgress = document.getElementById('vsol-fed-progress');
+      const stats = { sun: 0, rain: 0, none: 0 };
+      let done = 0;
+
+      function updateSummary() {
+        elSun.textContent = stats.sun;
+        elRain.textContent = stats.rain;
+        elNone.textContent = stats.none;
+        elTotal.textContent = jobs.length;
+        elProgress.textContent = done < jobs.length ? `(${done}/${jobs.length})` : '';
+      }
+      updateSummary();
+
+      const MAX_PARALLEL = 3;
+      const DELAY_MS = 200;
+      let active = 0;
+      const queue = jobs.slice();
+
+      function pump() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const job = queue.shift();
+          active++;
+          fetchTeamSchool(job.teamId, (school) => {
+            job.cell.textContent = school || '-';
+            if (school === '☀️') {
+              job.cell.title = 'Солнечная школа (Д, Пк, Км)';
+              job.cell.style.backgroundColor = '#fffacd';
+              stats.sun++;
+            } else if (school === '🌧️') {
+              job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
+              job.cell.style.backgroundColor = '#e0f0ff';
+              stats.rain++;
+            } else {
+              stats.none++;
+            }
+            active--;
+            done++;
+            updateSummary();
+            if (done < jobs.length) setTimeout(pump, DELAY_MS);
+          });
+        }
+      }
+      pump();
+    }
+
+    // Первый запуск
+    runSchoolScan(false);
+
+    // Кнопка «Пересчитать»
+    document.getElementById('vsol-fed-refresh').onclick = () => runSchoolScan(true);
   }
 
 const href = location.href;
