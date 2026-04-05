@@ -1193,10 +1193,7 @@ function render() {
       pump();
     }
 
-    // Первый запуск
-    runSchoolScan(false);
-
-    // Кнопка «Пересчитать»
+    // Запуск только по кнопке
     document.getElementById('vsol-fed-refresh').onclick = () => runSchoolScan(true);
   }
 
