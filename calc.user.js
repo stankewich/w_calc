@@ -1082,18 +1082,19 @@ function render() {
     }
     if (!teamsTable) return;
 
-    // === Сводка ПЕРЕД таблицей, горизонтальная ===
-    const summary = document.createElement('div');
+    // === Сводка ПЕРЕД таблицей — табличный формат ===
+    const summary = document.createElement('table');
     summary.id = 'vsol-fed-summary';
-    summary.style.cssText = 'margin:6px 0; padding:6px 12px; border:1px solid #009900; background:#f8fff8; font-size:12px; font-family:Arial,sans-serif; display:flex; align-items:center; gap:12px; flex-wrap:wrap;';
+    summary.className = 'tbl';
+    summary.style.cssText = 'margin:6px 0; width:260px; font-size:12px; font-family:Arial,sans-serif; border-collapse:collapse;';
     summary.innerHTML =
-      `<span style="font-weight:700">Школы:</span>` +
-      `<span>☀️ <b id="vsol-fed-sun">0</b></span>` +
-      `<span>🌧️ <b id="vsol-fed-rain">0</b></span>` +
-      `<span>— <b id="vsol-fed-none">0</b></span>` +
-      `<span style="color:#888">из <b id="vsol-fed-total">0</b></span>` +
-      `<span id="vsol-fed-progress" style="color:#999; font-size:11px"></span>` +
-      `<button id="vsol-fed-refresh" style="margin-left:auto; padding:2px 10px; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;">🔄 Пересчитать</button>`;
+      `<tbody>` +
+      `<tr bgcolor="#006600"><td class="lh18 txtw" colspan="2" style="text-align:center; padding:4px 8px"><b>Школы команд (<span id="vsol-fed-done">0</span> из <span id="vsol-fed-total">0</span>)</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">☀️ Солнечная</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-sun">0</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">🌧️ Дождевая</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-rain">0</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">Неопределено</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-none">0</b></td></tr>` +
+      `<tr><td colspan="2" style="text-align:center; padding:4px 8px"><button id="vsol-fed-refresh" style="width:100%; padding:3px 0; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;">🔄 Пересчитать</button></td></tr>` +
+      `</tbody>`;
     teamsTable.parentNode.insertBefore(summary, teamsTable);
 
     function runSchoolScan(forceRefresh) {
@@ -1147,7 +1148,7 @@ function render() {
       const elRain = document.getElementById('vsol-fed-rain');
       const elNone = document.getElementById('vsol-fed-none');
       const elTotal = document.getElementById('vsol-fed-total');
-      const elProgress = document.getElementById('vsol-fed-progress');
+      const elDone = document.getElementById('vsol-fed-done');
       const stats = { sun: 0, rain: 0, none: 0 };
       let done = 0;
 
@@ -1156,7 +1157,7 @@ function render() {
         elRain.textContent = stats.rain;
         elNone.textContent = stats.none;
         elTotal.textContent = jobs.length;
-        elProgress.textContent = done < jobs.length ? `(${done}/${jobs.length})` : '';
+        elDone.textContent = done;
       }
       updateSummary();
 
