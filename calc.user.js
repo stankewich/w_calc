@@ -1199,7 +1199,10 @@ function render() {
       pump();
     }
 
-    // Запуск только по кнопке
+    // Первый запуск — с кэшем
+    runSchoolScan(false);
+
+    // Кнопка «Пересчитать» — сброс кэша
     document.getElementById('vsol-fed-refresh').onclick = () => runSchoolScan(true);
   }
 
