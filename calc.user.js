@@ -33,11 +33,20 @@
 // @match        *://*.vfleague.com/teams_cntr.php*
 // @match        *://*.vfliga.ru/teams_cntr.php*
 // @match        *://*.vfliga.com/teams_cntr.php*
+// @match        *://*.virtualsoccer.ru/realplayers.php*
+// @match        *://*.virtualsoccer.ru/fed_news.php*
+// @match        *://www.transfermarkt.us/*/startseite/verein/*
+// @match        *://www.transfermarkt.com/*/startseite/verein/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // @connect      virtualsoccer.ru
 // @connect      vfleague.com
 // @connect      vfliga.ru
 // @connect      vfliga.com
+// @connect      transfermarkt.us
+// @connect      transfermarkt.com
 // @run-at       document-end
 // @downloadURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.user.js
 // @updateURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.meta.js
@@ -1225,5 +1234,260 @@ const href = location.href;
     enhanceAskToPlayPage();
   } else if (href.includes('/teams_cntr.php')) {
     enhanceFederationTeamsPage();
+  } else if (href.includes('/realplayers.php')) {
+    initPlayerParser();
+  } else if (href.includes('transfermarkt.us') || href.includes('transfermarkt.com')) {
+    initTransfermarkt();
+  } else if (href.includes('/fed_news.php')) {
+    initNationalTeamMatches();
+  }
+
+  // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
+
+  function initPlayerParser() {
+    function parseVSPlayers() {
+      const players = [];
+      const rows = document.querySelectorAll('#sortable tbody tr[id^="tr_"]');
+      rows.forEach(row => {
+        const playerId = row.querySelector('input[name="plr_id[]"]')?.value;
+        const original = row.querySelector('input[name="orig_name[]"]')?.value || '';
+        const link = row.querySelector('input[name="plr_linkvalue[]"]')?.value || '';
+        if (playerId && playerId !== '0') {
+          players.push({ id: playerId, original, link, row });
+        }
+      });
+      return players;
+    }
+
+    function normalizeString(str) { return str.toLowerCase().trim().replace(/\s+/g, ' '); }
+
+    function levenshteinDistance(a, b) {
+      const m = a.length, n = b.length, d = [];
+      for (let i = 0; i <= m; i++) d[i] = [i];
+      for (let j = 0; j <= n; j++) d[0][j] = j;
+      for (let i = 1; i <= m; i++)
+        for (let j = 1; j <= n; j++)
+          d[i][j] = a[i-1] === b[j-1] ? d[i-1][j-1] : Math.min(d[i-1][j-1], d[i][j-1], d[i-1][j]) + 1;
+      return d[m][n];
+    }
+
+    function similarity(a, b) {
+      const longer = a.length > b.length ? a : b;
+      if (!longer.length) return 1;
+      return (longer.length - levenshteinDistance(a, b)) / longer.length;
+    }
+
+    function findBestMatch(name, list, threshold = 0.85) {
+      let best = null, bestScore = 0;
+      list.forEach((c, i) => {
+        const s = similarity(name, c);
+        if (s > bestScore && s >= threshold) { bestScore = s; best = { name: c, index: i, score: s }; }
+      });
+      return best;
+    }
+
+    function compareAndHighlight() {
+      const vsPlayers = parseVSPlayers();
+      const tmData = GM_getValue('tmSavedPlayers', null);
+      if (!tmData) { alert('Нет данных Transfermarkt! Сначала сохраните игроков на странице TM.'); return; }
+      const tmPlayers = JSON.parse(tmData);
+      const tmNames = tmPlayers.map(p => normalizeString(p.fullName));
+      let notInTM = 0, similarMatches = 0;
+
+      vsPlayers.forEach(vp => {
+        if (!vp.original?.trim()) return;
+        const vsName = normalizeString(vp.original);
+        const origInput = vp.row.querySelector('input[name="orig_name[]"]');
+        if (!origInput) return;
+        origInput.style.fontWeight = ''; origInput.style.color = ''; origInput.title = '';
+        if (tmNames.some(t => t === vsName)) return;
+        const sim = findBestMatch(vsName, tmNames, 0.75);
+        if (sim) {
+          origInput.style.fontWeight = 'bold'; origInput.style.color = '#FF8C00';
+          origInput.title = `Похож на "${tmPlayers[sim.index].fullName}" (${Math.round(sim.score*100)}%)`;
+          similarMatches++;
+        } else {
+          origInput.style.fontWeight = 'bold'; origInput.style.color = '#DC143C';
+          origInput.title = 'Игрок не найден в Transfermarkt';
+          notInTM++;
+        }
+      });
+
+      const vsOriginals = vsPlayers.map(p => normalizeString(p.original)).filter(o => o);
+      const missing = tmPlayers.filter(tp => {
+        const n = normalizeString(tp.fullName);
+        if (vsOriginals.some(v => v === n)) return false;
+        return !findBestMatch(n, vsOriginals, 0.85);
+      });
+
+      const filled = fillEmptyRows(missing);
+      alert(`Сравнение:\n🔴 Нет в TM: ${notInTM}\n🟡 Похожие: ${similarMatches}\n🟢 Добавлено из TM: ${filled}\nВсего TM: ${tmPlayers.length}`);
+    }
+
+    function fillEmptyRows(missingPlayers) {
+      const rows = document.querySelectorAll('#sortable tbody tr[id^="tr_"]');
+      let count = 0;
+      rows.forEach(row => {
+        if (count >= missingPlayers.length) return;
+        const pid = row.querySelector('input[name="plr_id[]"]')?.value;
+        const orig = row.querySelector('input[name="orig_name[]"]')?.value || '';
+        if ((pid === '0' || !pid) && !orig.trim()) {
+          const p = missingPlayers[count];
+          const inp = row.querySelector('input[name="orig_name[]"]');
+          if (inp) {
+            inp.value = p.fullName; inp.style.fontWeight = 'bold'; inp.style.color = '#228B22';
+            inp.title = 'Добавлен из Transfermarkt';
+            const linkInp = row.querySelector('input[name="plr_linkvalue[]"]');
+            if (linkInp && p.profileUrl) {
+              linkInp.value = p.profileUrl.startsWith('http') ? p.profileUrl : 'https://www.transfermarkt.us' + p.profileUrl;
+            }
+            count++;
+          }
+        }
+      });
+      return count;
+    }
+
+    // UI
+    const btnTable = document.querySelector('table.nil[align="center"]');
+    if (btnTable) {
+      const tr = btnTable.querySelector('tbody tr');
+      if (tr) {
+        const td = document.createElement('td');
+        td.className = 'txt';
+        const btn = document.createElement('a');
+        btn.className = 'butn-orange'; btn.href = 'javascript:void(0)';
+        btn.textContent = '🔍 Сравнить с ТМ';
+        btn.onclick = e => { e.preventDefault(); compareAndHighlight(); };
+        td.appendChild(btn);
+        const last = tr.querySelector('td:last-child');
+        tr.insertBefore(td, last);
+      }
+    }
+    GM_registerMenuCommand('Сравнить с ТМ', compareAndHighlight);
+  }
+
+  function initTransfermarkt() {
+    function parseTMPlayers() {
+      const players = [], seen = new Set();
+      document.querySelectorAll('.items tbody tr').forEach(row => {
+        const link = row.querySelector('td.posrela table.inline-table td.hauptlink a');
+        if (!link) return;
+        const name = link.textContent.trim();
+        if (seen.has(name)) return;
+        seen.add(name);
+        players.push({ fullName: name, profileUrl: link.getAttribute('href') });
+      });
+      return players;
+    }
+
+    function saveTMPlayers() {
+      const players = parseTMPlayers();
+      GM_setValue('tmSavedPlayers', JSON.stringify(players));
+      GM_setValue('tmSavedDate', new Date().toISOString());
+      alert(`Сохранено ${players.length} игроков Transfermarkt`);
+    }
+
+    const table = document.querySelector('.responsive-table');
+    if (table) {
+      const div = document.createElement('div');
+      div.style.cssText = 'margin:10px 0; padding:10px; background:#f0f0f0; border-radius:5px;';
+      const btn = document.createElement('button');
+      btn.textContent = '💾 Сохранить игроков TM';
+      btn.style.cssText = 'padding:8px 16px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;';
+      btn.onclick = e => { e.preventDefault(); saveTMPlayers(); };
+      div.appendChild(btn);
+      table.parentNode.insertBefore(div, table);
+    }
+    GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
+  }
+
+  // ========== National Team Matches (fed_news.php) ==========
+
+  function initNationalTeamMatches() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const federationId = urlParams.get('nation_id');
+    if (!federationId) return;
+
+    const teamNames = { 0: 'Сборная', 1: 'Молодежная', 2: 'Юношеская' };
+
+    function fetchTeamData(fedId, type) {
+      return new Promise((resolve, reject) => {
+        httpGet(`${SITE_CONFIG.BASE_URL}/fed_sborn.php?num=${fedId}&type=${type}`, (err, html) => {
+          if (err || !html) { resolve(null); return; }
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const link = doc.querySelector('a[href*="nation.php?num="]');
+          if (link) {
+            const m = link.getAttribute('href').match(/num=(\d+)/);
+            if (m) { resolve({ nationNum: m[1] }); return; }
+          }
+          resolve(null);
+        });
+      });
+    }
+
+    function fetchTeamMatches(nationNum) {
+      return new Promise((resolve, reject) => {
+        httpGet(`${SITE_CONFIG.BASE_URL}/nation.php?num=${nationNum}`, (err, html) => {
+          if (err || !html) { resolve([]); return; }
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const matches = [];
+          const previewLinks = doc.querySelectorAll('a[href*="previewmatch.php"]');
+          if (previewLinks.length) {
+            const parentDiv = previewLinks[0].closest('div');
+            if (parentDiv) {
+              const opponentLink = parentDiv.querySelector('a[href*="nation.php"]');
+              matches.push({
+                text: parentDiv.textContent.trim(),
+                opponent: opponentLink ? opponentLink.textContent.trim() : '',
+                link: previewLinks[0].getAttribute('href')
+              });
+            }
+          }
+          resolve(matches);
+        });
+      });
+    }
+
+    async function fetchAllMatches() {
+      const allMatches = [];
+      for (let type = 0; type <= 2; type++) {
+        const data = await fetchTeamData(federationId, type);
+        if (data) {
+          const matches = await fetchTeamMatches(data.nationNum);
+          if (matches.length) allMatches.push({ teamName: teamNames[type], matches });
+        }
+      }
+      return allMatches;
+    }
+
+    function formatMatches(allMatches) {
+      if (!allMatches.length) return 'Будущие матчи сборных не найдены.';
+      let text = '[b]Будущие матчи сборных:[/b]\n\n';
+      allMatches.forEach(t => { text += `[b]${t.teamName}:[/b]\n`; t.matches.forEach(m => { text += `${m.text}\n`; }); text += '\n'; });
+      return text;
+    }
+
+    // UI — кнопка
+    const btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+    const btn = document.createElement('a');
+    btn.href = 'javascript:void(0)'; btn.className = 'butn';
+    btn.textContent = 'Будущие матчи сборных'; btn.style.marginLeft = '5px';
+    btn.onclick = async () => {
+      btn.textContent = 'Загрузка...';
+      try {
+        const allMatches = await fetchAllMatches();
+        const text = formatMatches(allMatches);
+        const memo = document.getElementById('memo');
+        if (memo) {
+          memo.value = memo.value ? memo.value + '\n\n' + text : text;
+          memo.dispatchEvent(new Event('change'));
+          if (typeof preview === 'function') preview();
+        }
+      } catch (e) { alert('Ошибка загрузки матчей'); }
+      btn.textContent = 'Будущие матчи сборных';
+    };
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 })();
