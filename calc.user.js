@@ -37,6 +37,20 @@
 // @match        *://*.virtualsoccer.ru/fed_news.php*
 // @match        *://www.transfermarkt.us/*/startseite/verein/*
 // @match        *://www.transfermarkt.com/*/startseite/verein/*
+// @match        *://www.transfermarkt.co.uk/*/startseite/verein/*
+// @match        *://www.transfermarkt.de/*/startseite/verein/*
+// @match        *://www.transfermarkt.es/*/startseite/verein/*
+// @match        *://www.transfermarkt.fr/*/startseite/verein/*
+// @match        *://www.transfermarkt.it/*/startseite/verein/*
+// @match        *://www.transfermarkt.com.br/*/startseite/verein/*
+// @match        *://www.transfermarkt.nl/*/startseite/verein/*
+// @match        *://www.transfermarkt.at/*/startseite/verein/*
+// @match        *://www.transfermarkt.pl/*/startseite/verein/*
+// @match        *://www.transfermarkt.pt/*/startseite/verein/*
+// @match        *://www.transfermarkt.com.tr/*/startseite/verein/*
+// @match        *://www.transfermarkt.ru/*/startseite/verein/*
+// @match        *://www.transfermarkt.jp/*/startseite/verein/*
+// @match        *://www.transfermarkt.world/*/startseite/verein/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -47,6 +61,20 @@
 // @connect      vfliga.com
 // @connect      transfermarkt.us
 // @connect      transfermarkt.com
+// @connect      transfermarkt.co.uk
+// @connect      transfermarkt.de
+// @connect      transfermarkt.es
+// @connect      transfermarkt.fr
+// @connect      transfermarkt.it
+// @connect      transfermarkt.com.br
+// @connect      transfermarkt.nl
+// @connect      transfermarkt.at
+// @connect      transfermarkt.pl
+// @connect      transfermarkt.pt
+// @connect      transfermarkt.com.tr
+// @connect      transfermarkt.ru
+// @connect      transfermarkt.jp
+// @connect      transfermarkt.world
 // @run-at       document-end
 // @downloadURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.user.js
 // @updateURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.meta.js
@@ -1236,7 +1264,7 @@ const href = location.href;
     enhanceFederationTeamsPage();
   } else if (href.includes('/realplayers.php')) {
     initPlayerParser();
-  } else if (href.includes('transfermarkt.us') || href.includes('transfermarkt.com')) {
+  } else if (location.hostname.includes('transfermarkt.')) {
     initTransfermarkt();
   } else if (href.includes('/fed_news.php')) {
     initNationalTeamMatches();
@@ -1339,7 +1367,7 @@ const href = location.href;
             inp.title = 'Добавлен из Transfermarkt';
             const linkInp = row.querySelector('input[name="plr_linkvalue[]"]');
             if (linkInp && p.profileUrl) {
-              linkInp.value = p.profileUrl.startsWith('http') ? p.profileUrl : 'https://www.transfermarkt.us' + p.profileUrl;
+              linkInp.value = p.profileUrl.startsWith('http') ? p.profileUrl : 'https://www.transfermarkt.world' + p.profileUrl;
             }
             count++;
           }
