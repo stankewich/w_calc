@@ -5,6 +5,10 @@
 // @version      1.0352
 // @description  Калькулятор статсы погоды, напов и определение школы команды
 // @author       community
+// @match        *://*.virtualsoccer.ru/roster.php*
+// @match        *://*.vfleague.com/roster.php*
+// @match        *://*.vfliga.ru/roster.php*
+// @match        *://*.vfliga.com/roster.php*
 // @match        *://*.virtualsoccer.ru/roster_m.php*
 // @match        *://*.vfleague.com/roster_m.php*
 // @match        *://*.vfliga.ru/roster_m.php*
@@ -25,11 +29,52 @@
 // @match        *://*.vfleague.com/mng_asktoplay.php*
 // @match        *://*.vfliga.ru/mng_asktoplay.php*
 // @match        *://*.vfliga.com/mng_asktoplay.php*
+// @match        *://*.virtualsoccer.ru/teams_cntr.php*
+// @match        *://*.vfleague.com/teams_cntr.php*
+// @match        *://*.vfliga.ru/teams_cntr.php*
+// @match        *://*.vfliga.com/teams_cntr.php*
+// @match        *://*.virtualsoccer.ru/realplayers.php*
+// @match        *://*.virtualsoccer.ru/fed_news.php*
+// @match        *://www.transfermarkt.us/*/startseite/verein/*
+// @match        *://www.transfermarkt.com/*/startseite/verein/*
+// @match        *://www.transfermarkt.co.uk/*/startseite/verein/*
+// @match        *://www.transfermarkt.de/*/startseite/verein/*
+// @match        *://www.transfermarkt.es/*/startseite/verein/*
+// @match        *://www.transfermarkt.fr/*/startseite/verein/*
+// @match        *://www.transfermarkt.it/*/startseite/verein/*
+// @match        *://www.transfermarkt.com.br/*/startseite/verein/*
+// @match        *://www.transfermarkt.nl/*/startseite/verein/*
+// @match        *://www.transfermarkt.at/*/startseite/verein/*
+// @match        *://www.transfermarkt.pl/*/startseite/verein/*
+// @match        *://www.transfermarkt.pt/*/startseite/verein/*
+// @match        *://www.transfermarkt.com.tr/*/startseite/verein/*
+// @match        *://www.transfermarkt.ru/*/startseite/verein/*
+// @match        *://www.transfermarkt.jp/*/startseite/verein/*
+// @match        *://www.transfermarkt.world/*/startseite/verein/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
 // @connect      virtualsoccer.ru
 // @connect      vfleague.com
 // @connect      vfliga.ru
 // @connect      vfliga.com
+// @connect      transfermarkt.us
+// @connect      transfermarkt.com
+// @connect      transfermarkt.co.uk
+// @connect      transfermarkt.de
+// @connect      transfermarkt.es
+// @connect      transfermarkt.fr
+// @connect      transfermarkt.it
+// @connect      transfermarkt.com.br
+// @connect      transfermarkt.nl
+// @connect      transfermarkt.at
+// @connect      transfermarkt.pl
+// @connect      transfermarkt.pt
+// @connect      transfermarkt.com.tr
+// @connect      transfermarkt.ru
+// @connect      transfermarkt.jp
+// @connect      transfermarkt.world
 // @run-at       document-end
 // @downloadURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.user.js
 // @updateURL https://update.greasyfork.org/scripts/555253/VSOL%3A%20weather%20and%20FWDs%20count.meta.js
@@ -79,9 +124,18 @@
     GM_xmlhttpRequest({
     method: "GET",
     url,
-    onload: r => cb(null, r.responseText),
-    onerror: e => cb(e, null),
-    ontimeout: e => cb(e, null)
+    timeout: 45000,
+    onload: r => {
+      console.log(`[httpGet] ${url} → status=${r.status}, length=${(r.responseText||'').length}`);
+      if (r.status >= 200 && r.status < 400) {
+        cb(null, r.responseText);
+      } else {
+        console.warn(`[httpGet] HTTP error: ${r.status} for ${url}`);
+        cb(new Error(`HTTP ${r.status}`), null);
+      }
+    },
+    onerror: e => { console.error(`[httpGet] onerror: ${url}`, e); cb(e, null); },
+    ontimeout: () => { console.error(`[httpGet] timeout: ${url}`); cb(new Error('timeout'), null); }
     });
   }
   function parseWeatherFromMatch(html) {
@@ -114,34 +168,42 @@
   }
   function parseFwdsFromHtml(doc, is_home) {
     const tbls = doc.getElementsByClassName("tbl");
+    console.log(`[parseFwds] tables found: ${tbls.length}, is_home: ${is_home}`);
     const tbl = is_home ? tbls[0] : tbls[1];
-    if (!tbl) return null;
+    if (!tbl) { console.warn('[parseFwds] target table not found'); return null; }
     const rows = tbl.getElementsByTagName("tr");
-    if (rows.length < 2) return null;
+    if (rows.length < 2) { console.warn(`[parseFwds] too few rows: ${rows.length}`); return null; }
     let fwds = 0;
     for (let i = 1; i < rows.length; i++) {
       const columns = rows[i].getElementsByTagName("td");
       if (!columns.length) continue;
       const span = columns[0].getElementsByTagName("span");
       if (!span.length) continue;
-      switch (span[0].innerText) {
+      const pos = span[0].textContent.trim();
+      switch (pos) {
         case "LW": case "LF": case "CF": case "ST": case "RW": case "RF": case "AM":
           fwds++; break;
       }
     }
+    console.log(`[parseFwds] result: ${fwds}`);
     return fwds;
   }
-  function enhanceRosterMatchesPage() {
+  function enhanceRosterMatchesPage(forceRefresh) {
+    console.log(`[RosterMatches] start, forceRefresh=${!!forceRefresh}`);
     const mainTables = Array.from(document.querySelectorAll('table.tbl'));
+    console.log(`[RosterMatches] table.tbl count: ${mainTables.length}`);
     if (!mainTables.length) return;
     let matchesTable = null;
     for (const t of mainTables) {
         const header = t.querySelector('tr[bgcolor="#006600"]');
         if (header && /Дата/i.test(header.textContent)) { matchesTable = t; break; }
     }
-    if (!matchesTable) return;
+    if (!matchesTable) { console.warn('[RosterMatches] matchesTable not found'); return; }
     const headers = matchesTable.querySelectorAll('tr[bgcolor="#006600"]');
-    headers.forEach(h => {
+
+    // Добавляем заголовки и кнопку только при первом запуске
+    if (!matchesTable.querySelector('.weather_match')) {
+      headers.forEach(h => {
         const th1 = document.createElement('td');
         th1.className = 'lh18 txtw';
         th1.style.whiteSpace = 'nowrap';
@@ -152,7 +214,22 @@
         th2.style.whiteSpace = 'nowrap';
         th2.innerHTML = '<b>Нпд</b>';
         h.appendChild(th2);
-    });
+      });
+
+      // Кнопка «Обновить» рядом с таблицей
+      const refreshBtn = document.createElement('button');
+      refreshBtn.textContent = '🔄 Обновить Пгд/Нпд';
+      refreshBtn.style.cssText = 'margin:6px 0; padding:3px 10px; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;';
+      refreshBtn.onclick = () => {
+        clearMatchCache();
+        // Очищаем старые данные из ячеек
+        matchesTable.querySelectorAll('.weather_match').forEach(td => { td.innerHTML = ''; td.removeAttribute('title'); });
+        matchesTable.querySelectorAll('.fwds_match').forEach(td => { td.textContent = ''; td.style.backgroundColor = ''; });
+        enhanceRosterMatchesPage(true);
+      };
+      matchesTable.parentNode.insertBefore(refreshBtn, matchesTable);
+    }
+
     let stageIndex = -1;
     const headerTds = headers[0]?.querySelectorAll('td');
     if (headerTds) {
@@ -160,9 +237,12 @@
         if (/Стадия/i.test(headerTds[i].textContent)) { stageIndex = i; break; }
       }
     }
-    if (stageIndex === -1) return;
+    if (stageIndex === -1) { console.warn('[RosterMatches] stageIndex not found'); return; }
+
+    const cache = forceRefresh ? {} : getMatchCache();
     const jobs = [];
     const rows = Array.from(matchesTable.querySelectorAll('tr')).filter(tr => tr.getAttribute('bgcolor') !== '#006600');
+    console.log(`[RosterMatches] candidate rows: ${rows.length}`);
     rows.forEach(tr => {
       if (tr.getAttribute('bgcolor') && tr.getAttribute('bgcolor').toUpperCase() === '#FFEEEE') return;
       if (tr.querySelector('table')) return;
@@ -171,57 +251,97 @@
       const resultTd = tds[stageIndex + 1];
       if (!resultTd.hasAttribute('title')) return;
       if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') return;
-      const tdWeather = document.createElement('td');
-      tdWeather.className = 'lh16 txt weather_match';
-      tdWeather.style.textAlign = 'center';
-      tr.appendChild(tdWeather);
-      const tdFwds = document.createElement('td');
-      tdFwds.className = 'lh16 txt fwds_match';
-      tdFwds.style.textAlign = 'center';
-      tr.appendChild(tdFwds);
+
+      // Находим или создаём ячейки
+      let tdWeather = tr.querySelector('.weather_match');
+      let tdFwds = tr.querySelector('.fwds_match');
+      if (!tdWeather) {
+        tdWeather = document.createElement('td');
+        tdWeather.className = 'lh16 txt weather_match';
+        tdWeather.style.textAlign = 'center';
+        tr.appendChild(tdWeather);
+      }
+      if (!tdFwds) {
+        tdFwds = document.createElement('td');
+        tdFwds.className = 'lh16 txt fwds_match';
+        tdFwds.style.textAlign = 'center';
+        tr.appendChild(tdFwds);
+      }
+
       let matchLink = null;
       for (let i = 0; i < tds.length; i++) {
         const a = tds[i].querySelector('a[href*="viewmatch.php"]');
         if (a) { matchLink = a.href; break; }
       }
-      if (matchLink) {
-        const is_home = tds[5]?.innerText.trim() === "Д";
+      if (!matchLink) return;
+
+      const is_home = tds[5]?.innerText.trim() === "Д";
+
+      // Проверяем кэш
+      const cached = cache[matchLink];
+      if (cached) {
+        console.log(`[RosterMatches] cache hit: ${matchLink}`);
+        if (cached.weather) {
+          const icon = setWeatherIcon(cached.weather);
+          const koef = WEATHER_SET[cached.weather]?.koef ?? '';
+          const title = koef ? `${cached.weather} (Кф: ${koef})` : cached.weather;
+          tdWeather.innerHTML = `<img src="${icon}" style="height:14px" alt="${cached.weather}">`;
+          tdWeather.title = title;
+        }
+        const fwds = is_home ? cached.fwdsHome : cached.fwdsAway;
+        if (fwds !== null && fwds !== undefined) {
+          tdFwds.textContent = fwds;
+          tdFwds.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
+        } else {
+          tdFwds.textContent = "N/A";
+        }
+      } else {
         jobs.push({ url: matchLink, is_home, weatherCell: tdWeather, fwdsCell: tdFwds });
       }
     });
+    console.log(`[RosterMatches] cache hits: ${rows.length - jobs.length}, jobs to fetch: ${jobs.length}`);
     if (jobs.length) {
-      const MAX_PARALLEL = 5;
+      const MAX_PARALLEL = 3;
+      const MAX_RETRIES = 2;
+      const DELAY_MS = 300;
       let active = 0;
-      const queue = jobs.slice();
+      const queue = jobs.map(j => ({ ...j, retries: 0 }));
       function work() {
         while (active < MAX_PARALLEL && queue.length) {
           const job = queue.shift();
           active++;
-          httpGet(job.url, (_, html) => {
+          httpGet(job.url, (err, html) => {
+            console.log(`[RosterMatches] fetched ${job.url}, err=${!!err}, html=${!!html}, retry=${job.retries}`);
             if (html) {
+              const data = parseMatchData(html);
+              // Кэшируем
+              setMatchCache(job.url, data.weather, data.fwdsHome, data.fwdsAway);
               // Погода
-              const key = parseWeatherFromMatch(html);
-              if (key) {
-                const icon = setWeatherIcon(key);
-                const koef = WEATHER_SET[key]?.koef ?? '';
-                const title = koef ? `${key} (Кф: ${koef})` : key;
-                job.weatherCell.innerHTML = `<img src="${icon}" style="height:14px" alt="${key}">`;
+              if (data.weather) {
+                const icon = setWeatherIcon(data.weather);
+                const koef = WEATHER_SET[data.weather]?.koef ?? '';
+                const title = koef ? `${data.weather} (Кф: ${koef})` : data.weather;
+                job.weatherCell.innerHTML = `<img src="${icon}" style="height:14px" alt="${data.weather}">`;
                 job.weatherCell.title = title;
               }
-              // Нападающие — парсим из того же HTML
-              const doc = new DOMParser().parseFromString(html, 'text/html');
-              const fwds = parseFwdsFromHtml(doc, job.is_home);
+              // Нападающие
+              const fwds = job.is_home ? data.fwdsHome : data.fwdsAway;
               if (fwds !== null) {
                 job.fwdsCell.textContent = fwds;
                 job.fwdsCell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
               } else {
                 job.fwdsCell.textContent = "N/A";
               }
+            } else if (job.retries < MAX_RETRIES) {
+              job.retries++;
+              console.log(`[RosterMatches] retry #${job.retries} for ${job.url}`);
+              queue.push(job);
             } else {
               job.fwdsCell.textContent = "Err";
+              job.weatherCell.textContent = "—";
             }
             active--;
-            work();
+            setTimeout(work, DELAY_MS);
           });
         }
       }
@@ -375,7 +495,7 @@ function render() {
 
   // Функция для определения школы по суммам спецвозможностей
   function detectSchool(sunnySum, rainySum) {
-    const THRESHOLD = 30;
+    const THRESHOLD = 10;
     
     if (sunnySum >= THRESHOLD && sunnySum > rainySum) return '☀️';
     if (rainySum >= THRESHOLD && rainySum > sunnySum) return '🌧️';
@@ -460,24 +580,140 @@ function render() {
     
     const url = `${SITE_CONFIG.BASE_URL}/roster.php?num=${teamId}`;
     
-    httpGet(url, (_, html) => {
-      if (!html) {
-        callback('');
+    // fetch() вместо GM_xmlhttpRequest — запрос идёт от имени страницы
+    // с правильными куками, referer и origin (неотличимо от навигации)
+    fetch(url, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.text() : Promise.reject(r.status))
+      .then(html => {
+        const abilities = extractAbilities(html);
+        if (abilities) {
+          const sunnySum = abilities.д + abilities.пк + abilities.км;
+          const rainySum = abilities.г + abilities.ск + abilities.пд;
+          const school = detectSchool(sunnySum, rainySum);
+          setSchoolCache(teamId, school);
+          callback(school);
+        } else {
+          callback('');
+        }
+      })
+      .catch(() => callback(''));
+  }
+
+  // Кэш данных матчей (погода + Нпд)
+  const MATCH_CACHE_KEY = 'vsol_match_data';
+  const MATCH_CACHE_EXPIRY = 24 * 60 * 60 * 1000; // 1 день
+
+  function getMatchCache() {
+    try {
+      const cached = localStorage.getItem(MATCH_CACHE_KEY);
+      if (!cached) return {};
+      const data = JSON.parse(cached);
+      const now = Date.now();
+      Object.keys(data).forEach(key => {
+        if (now - data[key].time > MATCH_CACHE_EXPIRY) delete data[key];
+      });
+      return data;
+    } catch { return {}; }
+  }
+
+  function setMatchCache(matchUrl, weather, fwdsHome, fwdsAway) {
+    try {
+      const cache = getMatchCache();
+      cache[matchUrl] = { weather, fwdsHome, fwdsAway, time: Date.now() };
+      localStorage.setItem(MATCH_CACHE_KEY, JSON.stringify(cache));
+    } catch {}
+  }
+
+  function clearMatchCache() {
+    try { localStorage.removeItem(MATCH_CACHE_KEY); } catch {}
+  }
+
+  // Парсинг одного матча: погода + Нпд для обеих сторон
+  function parseMatchData(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const weather = parseWeatherFromMatch(html);
+    const fwdsHome = parseFwdsFromHtml(doc, true);
+    const fwdsAway = parseFwdsFromHtml(doc, false);
+    return { weather, fwdsHome, fwdsAway };
+  }
+
+  // Предзагрузка матчей при открытии roster.php
+  function prefetchMatchData() {
+    const teamNum = (location.search.match(/num=(\d+)/) || [])[1];
+    if (!teamNum) return;
+
+    // Загружаем roster_m.php этой команды
+    const url = `${SITE_CONFIG.BASE_URL}/roster_m.php?num=${teamNum}`;
+    console.log(`[Prefetch] Загружаем roster_m для team=${teamNum}`);
+
+    httpGet(url, (err, html) => {
+      if (err || !html) { console.warn('[Prefetch] Ошибка загрузки roster_m'); return; }
+
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const allRows = Array.from(doc.querySelectorAll('table.tbl tr'));
+
+      // Ищем индекс колонки «Стадия»
+      let stageIndex = -1;
+      const headerRow = doc.querySelector('table.tbl tr[bgcolor="#006600"]');
+      if (headerRow) {
+        const hCells = headerRow.querySelectorAll('td');
+        for (let i = 0; i < hCells.length; i++) {
+          if (/Стадия/i.test(hCells[i].textContent)) { stageIndex = i; break; }
+        }
+      }
+
+      // Собираем ссылки на сыгранные матчи
+      const matchLinks = [];
+      const cache = getMatchCache();
+      for (const row of allRows) {
+        if (row.getAttribute('bgcolor') === '#006600') continue;
+        if (row.getAttribute('bgcolor')?.toUpperCase() === '#FFEEEE') continue;
+        if (row.querySelector('table')) continue;
+        const tds = row.querySelectorAll('td');
+        if (stageIndex >= 0 && tds.length > stageIndex + 1) {
+          const resultTd = tds[stageIndex + 1];
+          if (!resultTd?.hasAttribute('title')) continue;
+          if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') continue;
+        }
+        for (const td of tds) {
+          const a = td.querySelector('a[href*="viewmatch.php"]');
+          if (a) {
+            const href = a.href || a.getAttribute('href');
+            const fullUrl = href.startsWith('http') ? href : `${SITE_CONFIG.BASE_URL}${href.startsWith('/') ? '' : '/'}${href}`;
+            if (!cache[fullUrl]) matchLinks.push(fullUrl);
+            break;
+          }
+        }
+      }
+
+      if (!matchLinks.length) {
+        console.log('[Prefetch] Все матчи уже в кэше или нет сыгранных');
         return;
       }
-      
-      const abilities = extractAbilities(html);
-      if (abilities) {
-        const sunnySum = abilities.д + abilities.пк + abilities.км;
-        const rainySum = abilities.г + abilities.ск + abilities.пд;
-        const school = detectSchool(sunnySum, rainySum);
-        
-        // Сохраняем в кэш
-        setSchoolCache(teamId, school);
-        callback(school);
-      } else {
-        callback('');
+
+      console.log(`[Prefetch] Матчей для загрузки: ${matchLinks.length}`);
+      const MAX_PARALLEL = 2;
+      const DELAY_MS = 500;
+      let active = 0, done = 0;
+      const queue = matchLinks.slice();
+
+      function pump() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const matchUrl = queue.shift();
+          active++;
+          httpGet(matchUrl, (e, mHtml) => {
+            if (mHtml) {
+              const data = parseMatchData(mHtml);
+              setMatchCache(matchUrl, data.weather, data.fwdsHome, data.fwdsAway);
+            }
+            active--;
+            done++;
+            console.log(`[Prefetch] ${done}/${matchLinks.length} done`);
+            setTimeout(pump, DELAY_MS);
+          });
+        }
       }
+      pump();
     });
   }
 
@@ -869,8 +1105,148 @@ function render() {
     });
   }
 
+  // Функция для добавления колонки "Школа" на странице teams_cntr.php (список команд федерации)
+  function enhanceFederationTeamsPage() {
+    const mainTables = document.querySelectorAll('table.tbl');
+    if (!mainTables.length) return;
+
+    let teamsTable = null;
+    for (const t of mainTables) {
+      const header = t.querySelector('tr[bgcolor="#006600"]');
+      if (header && /Название команды/i.test(header.textContent)) { teamsTable = t; break; }
+    }
+    if (!teamsTable) return;
+
+    // === Сводка ПЕРЕД таблицей — табличный формат ===
+    const summary = document.createElement('table');
+    summary.id = 'vsol-fed-summary';
+    summary.className = 'tbl';
+    summary.style.cssText = 'margin:6px auto; width:260px; font-size:12px; font-family:Arial,sans-serif; border-collapse:collapse;';
+    summary.innerHTML =
+      `<tbody>` +
+      `<tr bgcolor="#006600"><td class="lh18 txtw" colspan="2" style="text-align:center; padding:4px 8px"><b>Школы команд (<span id="vsol-fed-done">0</span> из <span id="vsol-fed-total">0</span>)</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">☀️ Солнечная</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-sun">0</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">🌧️ Дождевая</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-rain">0</b></td></tr>` +
+      `<tr><td class="lh18 txtl" style="padding:3px 8px">Неопределено</td><td class="lh18 txtr" style="padding:3px 8px"><b id="vsol-fed-none">0</b></td></tr>` +
+      `<tr><td colspan="2" style="text-align:center; padding:4px 8px"><button id="vsol-fed-refresh" style="width:100%; padding:3px 0; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;">🔄 Пересчитать</button></td></tr>` +
+      `</tbody>`;
+    teamsTable.parentNode.insertBefore(summary, teamsTable);
+
+    function runSchoolScan(forceRefresh) {
+      // Добавляем заголовок «Шк» если ещё нет
+      const headers = teamsTable.querySelectorAll('tr[bgcolor="#006600"]');
+      if (!teamsTable.querySelector('.school-fed-header')) {
+        headers.forEach(h => {
+          const th = document.createElement('td');
+          th.className = 'lh18 txtw qt school-fed-header';
+          th.style.width = '25px';
+          th.title = 'Школа команды';
+          th.innerHTML = '<b>Шк</b>';
+          h.appendChild(th);
+        });
+      }
+
+      // Собираем строки команд
+      const allRows = Array.from(teamsTable.querySelectorAll('tr')).filter(tr => !tr.getAttribute('bgcolor'));
+      const jobs = [];
+
+      allRows.forEach(row => {
+        const rosterLink = row.querySelector('a[href*="roster.php?num="]');
+        if (!rosterLink) return;
+        const m = rosterLink.href.match(/num=(\d+)/);
+        if (!m) return;
+        const teamId = m[1];
+
+        let cell = row.querySelector('.school-fed-cell');
+        if (!cell) {
+          cell = document.createElement('td');
+          cell.className = 'lh18 txt school-fed-cell';
+          cell.style.textAlign = 'center';
+          row.appendChild(cell);
+        }
+        cell.textContent = '...';
+        cell.style.backgroundColor = '';
+        cell.removeAttribute('title');
+
+        jobs.push({ teamId, cell });
+      });
+
+      if (!jobs.length) return;
+
+      // Сбрасываем кэш при пересчёте
+      if (forceRefresh) {
+        try { localStorage.removeItem(CACHE_KEY); } catch {}
+      }
+
+      // Обновляем сводку
+      const elSun = document.getElementById('vsol-fed-sun');
+      const elRain = document.getElementById('vsol-fed-rain');
+      const elNone = document.getElementById('vsol-fed-none');
+      const elTotal = document.getElementById('vsol-fed-total');
+      const elDone = document.getElementById('vsol-fed-done');
+      const stats = { sun: 0, rain: 0, none: 0 };
+      let done = 0;
+
+      function updateSummary() {
+        elSun.textContent = stats.sun;
+        elRain.textContent = stats.rain;
+        elNone.textContent = stats.none;
+        elTotal.textContent = jobs.length;
+        elDone.textContent = done;
+      }
+      updateSummary();
+
+      const MAX_PARALLEL = 1;
+      const DELAY_MS = 500;
+      const MAX_RETRIES = 2;
+      let active = 0;
+      const queue = jobs.map(j => ({ ...j, retries: 0 }));
+
+      function pump() {
+        while (active < MAX_PARALLEL && queue.length) {
+          const job = queue.shift();
+          active++;
+          fetchTeamSchool(job.teamId, (school) => {
+            if (school === '' && job.retries < MAX_RETRIES) {
+              // Пустой результат может быть таймаутом — retry
+              job.retries++;
+              queue.push(job);
+              job.cell.textContent = `... (${job.retries})`;
+            } else {
+              job.cell.textContent = school || '-';
+              if (school === '☀️') {
+                job.cell.title = 'Солнечная школа (Д, Пк, Км)';
+                job.cell.style.backgroundColor = '#fffacd';
+                stats.sun++;
+              } else if (school === '🌧️') {
+                job.cell.title = 'Дождевая школа (Г, Ск, Пд)';
+                job.cell.style.backgroundColor = '#e0f0ff';
+                stats.rain++;
+              } else {
+                stats.none++;
+              }
+              done++;
+              updateSummary();
+            }
+            active--;
+            setTimeout(pump, DELAY_MS);
+          });
+        }
+      }
+      pump();
+    }
+
+    // Первый запуск — с кэшем
+    runSchoolScan(false);
+
+    // Кнопка «Пересчитать» — сброс кэша
+    document.getElementById('vsol-fed-refresh').onclick = () => runSchoolScan(true);
+  }
+
 const href = location.href;
-  if (href.includes('/roster_m.php')) {
+  if (href.includes('/roster.php') && !href.includes('/roster_m.php') && !href.includes('/roster_s.php')) {
+    prefetchMatchData();
+  } else if (href.includes('/roster_m.php')) {
     enhanceRosterMatchesPage();
   } else if (href.includes('/roster_s.php')) {
     enhanceRosterStatsPage();
@@ -884,5 +1260,262 @@ const href = location.href;
         }
   } else if (href.includes('/mng_asktoplay.php')) {
     enhanceAskToPlayPage();
+  } else if (href.includes('/teams_cntr.php')) {
+    enhanceFederationTeamsPage();
+  } else if (href.includes('/realplayers.php')) {
+    initPlayerParser();
+  } else if (location.hostname.includes('transfermarkt.')) {
+    initTransfermarkt();
+  } else if (href.includes('/fed_news.php')) {
+    initNationalTeamMatches();
+  }
+
+  // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
+
+  function initPlayerParser() {
+    function parseVSPlayers() {
+      const players = [];
+      const rows = document.querySelectorAll('#sortable tbody tr[id^="tr_"]');
+      rows.forEach(row => {
+        const playerId = row.querySelector('input[name="plr_id[]"]')?.value;
+        const original = row.querySelector('input[name="orig_name[]"]')?.value || '';
+        const link = row.querySelector('input[name="plr_linkvalue[]"]')?.value || '';
+        if (playerId && playerId !== '0') {
+          players.push({ id: playerId, original, link, row });
+        }
+      });
+      return players;
+    }
+
+    function normalizeString(str) { return str.toLowerCase().trim().replace(/\s+/g, ' '); }
+
+    function levenshteinDistance(a, b) {
+      const m = a.length, n = b.length, d = [];
+      for (let i = 0; i <= m; i++) d[i] = [i];
+      for (let j = 0; j <= n; j++) d[0][j] = j;
+      for (let i = 1; i <= m; i++)
+        for (let j = 1; j <= n; j++)
+          d[i][j] = a[i-1] === b[j-1] ? d[i-1][j-1] : Math.min(d[i-1][j-1], d[i][j-1], d[i-1][j]) + 1;
+      return d[m][n];
+    }
+
+    function similarity(a, b) {
+      const longer = a.length > b.length ? a : b;
+      if (!longer.length) return 1;
+      return (longer.length - levenshteinDistance(a, b)) / longer.length;
+    }
+
+    function findBestMatch(name, list, threshold = 0.85) {
+      let best = null, bestScore = 0;
+      list.forEach((c, i) => {
+        const s = similarity(name, c);
+        if (s > bestScore && s >= threshold) { bestScore = s; best = { name: c, index: i, score: s }; }
+      });
+      return best;
+    }
+
+    function compareAndHighlight() {
+      const vsPlayers = parseVSPlayers();
+      const tmData = GM_getValue('tmSavedPlayers', null);
+      if (!tmData) { alert('Нет данных Transfermarkt! Сначала сохраните игроков на странице TM.'); return; }
+      const tmPlayers = JSON.parse(tmData);
+      const tmNames = tmPlayers.map(p => normalizeString(p.fullName));
+      let notInTM = 0, similarMatches = 0;
+
+      vsPlayers.forEach(vp => {
+        if (!vp.original?.trim()) return;
+        const vsName = normalizeString(vp.original);
+        const origInput = vp.row.querySelector('input[name="orig_name[]"]');
+        if (!origInput) return;
+        origInput.style.fontWeight = ''; origInput.style.color = ''; origInput.title = '';
+        if (tmNames.some(t => t === vsName)) return;
+        const sim = findBestMatch(vsName, tmNames, 0.75);
+        if (sim) {
+          origInput.style.fontWeight = 'bold'; origInput.style.color = '#FF8C00';
+          origInput.title = `Похож на "${tmPlayers[sim.index].fullName}" (${Math.round(sim.score*100)}%)`;
+          similarMatches++;
+        } else {
+          origInput.style.fontWeight = 'bold'; origInput.style.color = '#DC143C';
+          origInput.title = 'Игрок не найден в Transfermarkt';
+          notInTM++;
+        }
+      });
+
+      const vsOriginals = vsPlayers.map(p => normalizeString(p.original)).filter(o => o);
+      const missing = tmPlayers.filter(tp => {
+        const n = normalizeString(tp.fullName);
+        if (vsOriginals.some(v => v === n)) return false;
+        return !findBestMatch(n, vsOriginals, 0.85);
+      });
+
+      const filled = fillEmptyRows(missing);
+      alert(`Сравнение:\n🔴 Нет в TM: ${notInTM}\n🟡 Похожие: ${similarMatches}\n🟢 Добавлено из TM: ${filled}\nВсего TM: ${tmPlayers.length}`);
+    }
+
+    function fillEmptyRows(missingPlayers) {
+      const rows = document.querySelectorAll('#sortable tbody tr[id^="tr_"]');
+      let count = 0;
+      rows.forEach(row => {
+        if (count >= missingPlayers.length) return;
+        const pid = row.querySelector('input[name="plr_id[]"]')?.value;
+        const orig = row.querySelector('input[name="orig_name[]"]')?.value || '';
+        if ((pid === '0' || !pid) && !orig.trim()) {
+          const p = missingPlayers[count];
+          const inp = row.querySelector('input[name="orig_name[]"]');
+          if (inp) {
+            inp.value = p.fullName; inp.style.fontWeight = 'bold'; inp.style.color = '#228B22';
+            inp.title = 'Добавлен из Transfermarkt';
+            const linkInp = row.querySelector('input[name="plr_linkvalue[]"]');
+            if (linkInp && p.profileUrl) {
+              linkInp.value = p.profileUrl.startsWith('http') ? p.profileUrl : 'https://www.transfermarkt.world' + p.profileUrl;
+            }
+            count++;
+          }
+        }
+      });
+      return count;
+    }
+
+    // UI
+    const btnTable = document.querySelector('table.nil[align="center"]');
+    if (btnTable) {
+      const tr = btnTable.querySelector('tbody tr');
+      if (tr) {
+        const td = document.createElement('td');
+        td.className = 'txt';
+        const btn = document.createElement('a');
+        btn.className = 'butn-orange'; btn.href = 'javascript:void(0)';
+        btn.textContent = '🔍 Сравнить с ТМ';
+        btn.onclick = e => { e.preventDefault(); compareAndHighlight(); };
+        td.appendChild(btn);
+        const last = tr.querySelector('td:last-child');
+        tr.insertBefore(td, last);
+      }
+    }
+    GM_registerMenuCommand('Сравнить с ТМ', compareAndHighlight);
+  }
+
+  function initTransfermarkt() {
+    function parseTMPlayers() {
+      const players = [], seen = new Set();
+      document.querySelectorAll('.items tbody tr').forEach(row => {
+        const link = row.querySelector('td.posrela table.inline-table td.hauptlink a');
+        if (!link) return;
+        const name = link.textContent.trim();
+        if (seen.has(name)) return;
+        seen.add(name);
+        players.push({ fullName: name, profileUrl: link.getAttribute('href') });
+      });
+      return players;
+    }
+
+    function saveTMPlayers() {
+      const players = parseTMPlayers();
+      GM_setValue('tmSavedPlayers', JSON.stringify(players));
+      GM_setValue('tmSavedDate', new Date().toISOString());
+      alert(`Сохранено ${players.length} игроков Transfermarkt`);
+    }
+
+    const table = document.querySelector('.responsive-table');
+    if (table) {
+      const div = document.createElement('div');
+      div.style.cssText = 'margin:10px 0; padding:10px; background:#f0f0f0; border-radius:5px;';
+      const btn = document.createElement('button');
+      btn.textContent = '💾 Сохранить игроков TM';
+      btn.style.cssText = 'padding:8px 16px; background:#4CAF50; color:white; border:none; border-radius:4px; cursor:pointer;';
+      btn.onclick = e => { e.preventDefault(); saveTMPlayers(); };
+      div.appendChild(btn);
+      table.parentNode.insertBefore(div, table);
+    }
+    GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
+  }
+
+  // ========== National Team Matches (fed_news.php) ==========
+
+  function initNationalTeamMatches() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const federationId = urlParams.get('nation_id');
+    if (!federationId) return;
+
+    const teamNames = { 0: 'Сборная', 1: 'Молодежная', 2: 'Юношеская' };
+
+    function fetchTeamData(fedId, type) {
+      return new Promise((resolve, reject) => {
+        httpGet(`${SITE_CONFIG.BASE_URL}/fed_sborn.php?num=${fedId}&type=${type}`, (err, html) => {
+          if (err || !html) { resolve(null); return; }
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const link = doc.querySelector('a[href*="nation.php?num="]');
+          if (link) {
+            const m = link.getAttribute('href').match(/num=(\d+)/);
+            if (m) { resolve({ nationNum: m[1] }); return; }
+          }
+          resolve(null);
+        });
+      });
+    }
+
+    function fetchTeamMatches(nationNum) {
+      return new Promise((resolve, reject) => {
+        httpGet(`${SITE_CONFIG.BASE_URL}/nation.php?num=${nationNum}`, (err, html) => {
+          if (err || !html) { resolve([]); return; }
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const matches = [];
+          const previewLinks = doc.querySelectorAll('a[href*="previewmatch.php"]');
+          if (previewLinks.length) {
+            const parentDiv = previewLinks[0].closest('div');
+            if (parentDiv) {
+              const opponentLink = parentDiv.querySelector('a[href*="nation.php"]');
+              matches.push({
+                text: parentDiv.textContent.trim(),
+                opponent: opponentLink ? opponentLink.textContent.trim() : '',
+                link: previewLinks[0].getAttribute('href')
+              });
+            }
+          }
+          resolve(matches);
+        });
+      });
+    }
+
+    async function fetchAllMatches() {
+      const allMatches = [];
+      for (let type = 0; type <= 2; type++) {
+        const data = await fetchTeamData(federationId, type);
+        if (data) {
+          const matches = await fetchTeamMatches(data.nationNum);
+          if (matches.length) allMatches.push({ teamName: teamNames[type], matches });
+        }
+      }
+      return allMatches;
+    }
+
+    function formatMatches(allMatches) {
+      if (!allMatches.length) return 'Будущие матчи сборных не найдены.';
+      let text = '[b]Будущие матчи сборных:[/b]\n\n';
+      allMatches.forEach(t => { text += `[b]${t.teamName}:[/b]\n`; t.matches.forEach(m => { text += `${m.text}\n`; }); text += '\n'; });
+      return text;
+    }
+
+    // UI — кнопка
+    const btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+    const btn = document.createElement('a');
+    btn.href = 'javascript:void(0)'; btn.className = 'butn';
+    btn.textContent = 'Будущие матчи сборных'; btn.style.marginLeft = '5px';
+    btn.onclick = async () => {
+      btn.textContent = 'Загрузка...';
+      try {
+        const allMatches = await fetchAllMatches();
+        const text = formatMatches(allMatches);
+        const memo = document.getElementById('memo');
+        if (memo) {
+          memo.value = memo.value ? memo.value + '\n\n' + text : text;
+          memo.dispatchEvent(new Event('change'));
+          if (typeof preview === 'function') preview();
+        }
+      } catch (e) { alert('Ошибка загрузки матчей'); }
+      btn.textContent = 'Будущие матчи сборных';
+    };
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 })();
