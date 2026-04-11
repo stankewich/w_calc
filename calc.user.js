@@ -121,22 +121,28 @@
     return meta ? `${SITE_CONFIG.BASE_URL}/weather/weather_green${meta.icon}.svg` : '';
   }
   function httpGet(url, cb) {
-    GM_xmlhttpRequest({
-    method: "GET",
-    url,
-    timeout: 45000,
-    onload: r => {
-      console.log(`[httpGet] ${url} → status=${r.status}, length=${(r.responseText||'').length}`);
-      if (r.status >= 200 && r.status < 400) {
-        cb(null, r.responseText);
-      } else {
-        console.warn(`[httpGet] HTTP error: ${r.status} for ${url}`);
-        cb(new Error(`HTTP ${r.status}`), null);
-      }
-    },
-    onerror: e => { console.error(`[httpGet] onerror: ${url}`, e); cb(e, null); },
-    ontimeout: () => { console.error(`[httpGet] timeout: ${url}`); cb(new Error('timeout'), null); }
-    });
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, 45000);
+    fetch(url, { credentials: 'same-origin', signal: controller.signal })
+      .then(function(r) {
+        if (r.ok) return r.text();
+        throw new Error('HTTP ' + r.status);
+      })
+      .then(function(html) {
+        clearTimeout(timer);
+        console.log('[httpGet] ' + url + ' → ok, length=' + html.length);
+        cb(null, html);
+      })
+      .catch(function(e) {
+        clearTimeout(timer);
+        if (e.name === 'AbortError') {
+          console.error('[httpGet] timeout: ' + url);
+          cb(new Error('timeout'), null);
+        } else {
+          console.warn('[httpGet] error: ' + url, e);
+          cb(e, null);
+        }
+      });
   }
   function parseWeatherFromMatch(html) {
     const parser = new DOMParser();
@@ -580,23 +586,19 @@ function render() {
     
     const url = `${SITE_CONFIG.BASE_URL}/roster.php?num=${teamId}`;
     
-    // fetch() вместо GM_xmlhttpRequest — запрос идёт от имени страницы
-    // с правильными куками, referer и origin (неотличимо от навигации)
-    fetch(url, { credentials: 'same-origin' })
-      .then(r => r.ok ? r.text() : Promise.reject(r.status))
-      .then(html => {
-        const abilities = extractAbilities(html);
-        if (abilities) {
-          const sunnySum = abilities.д + abilities.пк + abilities.км;
-          const rainySum = abilities.г + abilities.ск + abilities.пд;
-          const school = detectSchool(sunnySum, rainySum);
-          setSchoolCache(teamId, school);
-          callback(school);
-        } else {
-          callback('');
-        }
-      })
-      .catch(() => callback(''));
+    httpGet(url, (err, html) => {
+      if (err || !html) { callback(''); return; }
+      const abilities = extractAbilities(html);
+      if (abilities) {
+        const sunnySum = abilities.д + abilities.пк + abilities.км;
+        const rainySum = abilities.г + abilities.ск + abilities.пд;
+        const school = detectSchool(sunnySum, rainySum);
+        setSchoolCache(teamId, school);
+        callback(school);
+      } else {
+        callback('');
+      }
+    });
   }
 
   // Кэш данных матчей (погода + Нпд)
@@ -1268,6 +1270,7 @@ const href = location.href;
     initTransfermarkt();
   } else if (href.includes('/fed_news.php')) {
     initNationalTeamMatches();
+    initInterseasonCupResults();
   }
 
   // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
@@ -1428,6 +1431,144 @@ const href = location.href;
       table.parentNode.insertBefore(div, table);
     }
     GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
+  }
+
+  // ========== Interseason Cup Results (fed_news.php) ==========
+
+  function initInterseasonCupResults() {
+    function parseCupTable(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const headerRow = doc.querySelector('tr[bgcolor="#006600"]');
+      if (!headerRow) return { headers: [], entries: [] };
+
+      const headerCells = headerRow.querySelectorAll('td');
+      const headers = [];
+      for (const cell of headerCells) {
+        headers.push(cell.textContent.trim());
+      }
+
+      const entries = [];
+      const allRows = doc.querySelectorAll('tr');
+      for (const row of allRows) {
+        if (row === headerRow) continue;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 6) continue;
+
+        // Column 0 is № (row number), Column 1 is Див, Column 2 is №№
+        const rowNum = cells[0]?.textContent.trim().replace(/\.$/, '');
+        const div = cells[1]?.textContent.trim();
+        const nnText = cells[2]?.textContent.replace(/[^0-9]/g, '');
+        const nn = parseInt(nnText, 10);
+        if (isNaN(nn)) continue;
+
+        // Find team name cell — the one containing an <a> with href to roster.php
+        var teamName = '';
+        var teamHref = '';
+        for (var ci = 3; ci < cells.length; ci++) {
+          var link = cells[ci].querySelector('a[href*="roster.php"]');
+          if (link) {
+            teamName = link.textContent.trim();
+            teamHref = link.getAttribute('href') || '';
+            break;
+          }
+        }
+        if (!teamName) continue;
+
+        // Stats columns start after the team name cell (ci+1)
+        const cols = [];
+        for (let i = ci + 1; i < cells.length; i++) {
+          cols.push(cells[i].textContent.trim());
+        }
+
+        entries.push({ nn, rowNum, div, teamName, teamLink: teamHref, cols });
+      }
+
+      return { headers, entries };
+    }
+
+    function filterAndSort(entries) {
+      return entries
+        .filter(function (e) { return e.nn >= 1 && e.nn <= 100; })
+        .sort(function (a, b) { return a.nn - b.nn; });
+    }
+
+    function formatBBCode(entries, headers) {
+      var lines = [];
+      var headerCells = headers.map(function(h) { return '[td]' + h + '[/td]'; }).join('');
+      lines.push('[tr]' + headerCells + '[/tr]');
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var link = e.teamLink;
+        if (link && !link.startsWith('http')) {
+          link = SITE_CONFIG.BASE_URL + '/' + link.replace(/^\//, '');
+        }
+        var teamCell = '[a href=' + link + ' target="_blank"]' + e.teamName + '[/a]';
+        var parts = [e.rowNum || String(i + 1), e.div || '', String(e.nn), teamCell];
+        for (var j = 0; j < e.cols.length; j++) {
+          parts.push(e.cols[j]);
+        }
+        var rowCells = parts.map(function(p) { return '[td]' + p + '[/td]'; }).join('');
+        lines.push('[tr]' + rowCells + '[/tr]');
+      }
+      return '[table width="100%"]\n' + lines.join('\n') + '\n[/table]';
+    }
+
+    function insertIntoMemo(text) {
+      var memo = document.getElementById('memo');
+      if (!memo) return;
+      memo.value = memo.value ? memo.value + '\n\n' + text : text;
+      memo.dispatchEvent(new Event('change'));
+      if (typeof preview === 'function') preview();
+    }
+
+    function fetchCurrentSeason(callback) {
+      var url = SITE_CONFIG.BASE_URL + '/roster_m.php';
+      httpGet(url, function(err, html) {
+        if (err || !html) { callback(null); return; }
+        var match = html.match(/season=(\d+)/);
+        callback(match ? match[1] : null);
+      });
+    }
+
+    // --- Entry point ---
+    var urlParams = new URLSearchParams(window.location.search);
+    var nationId = urlParams.get('nation_id');
+    if (!nationId) return;
+
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Итоги Кубка Межсезонья';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+      fetchCurrentSeason(function(season) {
+        if (!season) {
+          alert('Ошибка: не удалось определить текущий сезон');
+          btn.textContent = 'Итоги Кубка Межсезонья';
+          return;
+        }
+        var cupUrl = SITE_CONFIG.BASE_URL + '/cupm_table.php?season=' + season + '&div=1&sort=' + nationId;
+        httpGet(cupUrl, function(err, html) {
+          if (err || !html) {
+            alert('Ошибка загрузки таблицы Кубка Межсезонья');
+            btn.textContent = 'Итоги Кубка Межсезонья';
+            return;
+          }
+          var result = parseCupTable(html);
+          var filtered = filterAndSort(result.entries);
+          var bbcode = formatBBCode(filtered, result.headers);
+          insertIntoMemo(bbcode);
+          btn.textContent = 'Итоги Кубка Межсезонья';
+        });
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 
   // ========== National Team Matches (fed_news.php) ==========
