@@ -121,22 +121,28 @@
     return meta ? `${SITE_CONFIG.BASE_URL}/weather/weather_green${meta.icon}.svg` : '';
   }
   function httpGet(url, cb) {
-    GM_xmlhttpRequest({
-    method: "GET",
-    url,
-    timeout: 45000,
-    onload: r => {
-      console.log(`[httpGet] ${url} → status=${r.status}, length=${(r.responseText||'').length}`);
-      if (r.status >= 200 && r.status < 400) {
-        cb(null, r.responseText);
-      } else {
-        console.warn(`[httpGet] HTTP error: ${r.status} for ${url}`);
-        cb(new Error(`HTTP ${r.status}`), null);
-      }
-    },
-    onerror: e => { console.error(`[httpGet] onerror: ${url}`, e); cb(e, null); },
-    ontimeout: () => { console.error(`[httpGet] timeout: ${url}`); cb(new Error('timeout'), null); }
-    });
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, 45000);
+    fetch(url, { credentials: 'same-origin', signal: controller.signal })
+      .then(function(r) {
+        if (r.ok) return r.text();
+        throw new Error('HTTP ' + r.status);
+      })
+      .then(function(html) {
+        clearTimeout(timer);
+        console.log('[httpGet] ' + url + ' → ok, length=' + html.length);
+        cb(null, html);
+      })
+      .catch(function(e) {
+        clearTimeout(timer);
+        if (e.name === 'AbortError') {
+          console.error('[httpGet] timeout: ' + url);
+          cb(new Error('timeout'), null);
+        } else {
+          console.warn('[httpGet] error: ' + url, e);
+          cb(e, null);
+        }
+      });
   }
   function parseWeatherFromMatch(html) {
     const parser = new DOMParser();
@@ -188,6 +194,35 @@
     console.log(`[parseFwds] result: ${fwds}`);
     return fwds;
   }
+
+  function parseDefenseType(doc, is_home) {
+    // Find the row containing "Вид защиты" label
+    const allTds = doc.querySelectorAll('td');
+    for (let i = 0; i < allTds.length; i++) {
+      if (allTds[i].textContent.trim().startsWith('Вид защиты')) {
+        const tr = allTds[i].closest('tr');
+        if (!tr) continue;
+        const tds = tr.querySelectorAll('td');
+        // Structure: td[colspan=2] (home) | td (label) | td[colspan=2] (away)
+        let valueTd = null;
+        if (is_home) {
+          valueTd = tds[0]; // first td = home team
+        } else {
+          valueTd = tds[tds.length - 1]; // last td = away team
+        }
+        if (!valueTd) return null;
+        const text = valueTd.textContent.trim().toLowerCase();
+        console.log(`[parseDefenseType] is_home=${is_home}, text="${text}"`);
+        if (text.includes('зональн')) return 'з';
+        if (text.includes('персональн')) return 'п';
+        if (text.includes('по игроку')) return 'п';
+        return null;
+      }
+    }
+    console.log(`[parseDefenseType] "Вид защиты" row not found`);
+    return null;
+  }
+
   function enhanceRosterMatchesPage(forceRefresh) {
     console.log(`[RosterMatches] start, forceRefresh=${!!forceRefresh}`);
     const mainTables = Array.from(document.querySelectorAll('table.tbl'));
@@ -214,17 +249,23 @@
         th2.style.whiteSpace = 'nowrap';
         th2.innerHTML = '<b>Нпд</b>';
         h.appendChild(th2);
+        const th3 = document.createElement('td');
+        th3.className = 'lh18 txtw';
+        th3.style.whiteSpace = 'nowrap';
+        th3.innerHTML = '<b>Зщт</b>';
+        h.appendChild(th3);
       });
 
       // Кнопка «Обновить» рядом с таблицей
       const refreshBtn = document.createElement('button');
-      refreshBtn.textContent = '🔄 Обновить Пгд/Нпд';
+      refreshBtn.textContent = '🔄 Обновить Пгд/Нпд/Зщт';
       refreshBtn.style.cssText = 'margin:6px 0; padding:3px 10px; cursor:pointer; font-size:11px; border:1px solid #009900; background:#f0fff0; border-radius:3px;';
       refreshBtn.onclick = () => {
         clearMatchCache();
         // Очищаем старые данные из ячеек
         matchesTable.querySelectorAll('.weather_match').forEach(td => { td.innerHTML = ''; td.removeAttribute('title'); });
         matchesTable.querySelectorAll('.fwds_match').forEach(td => { td.textContent = ''; td.style.backgroundColor = ''; });
+        matchesTable.querySelectorAll('.def_match').forEach(td => { td.textContent = ''; });
         enhanceRosterMatchesPage(true);
       };
       matchesTable.parentNode.insertBefore(refreshBtn, matchesTable);
@@ -255,6 +296,7 @@
       // Находим или создаём ячейки
       let tdWeather = tr.querySelector('.weather_match');
       let tdFwds = tr.querySelector('.fwds_match');
+      let tdDef = tr.querySelector('.def_match');
       if (!tdWeather) {
         tdWeather = document.createElement('td');
         tdWeather.className = 'lh16 txt weather_match';
@@ -267,6 +309,12 @@
         tdFwds.style.textAlign = 'center';
         tr.appendChild(tdFwds);
       }
+      if (!tdDef) {
+        tdDef = document.createElement('td');
+        tdDef.className = 'lh16 txt def_match';
+        tdDef.style.textAlign = 'center';
+        tr.appendChild(tdDef);
+      }
 
       let matchLink = null;
       for (let i = 0; i < tds.length; i++) {
@@ -277,9 +325,9 @@
 
       const is_home = tds[5]?.innerText.trim() === "Д";
 
-      // Проверяем кэш
+      // Проверяем кэш (invalidate if missing new fields)
       const cached = cache[matchLink];
-      if (cached) {
+      if (cached && cached.defHome !== undefined) {
         console.log(`[RosterMatches] cache hit: ${matchLink}`);
         if (cached.weather) {
           const icon = setWeatherIcon(cached.weather);
@@ -295,8 +343,13 @@
         } else {
           tdFwds.textContent = "N/A";
         }
+        const def = is_home ? cached.defHome : cached.defAway;
+        if (def) {
+          tdDef.textContent = def;
+          tdDef.style.backgroundColor = def === 'з' ? '#ffe0e0' : '#e0ffe0';
+        }
       } else {
-        jobs.push({ url: matchLink, is_home, weatherCell: tdWeather, fwdsCell: tdFwds });
+        jobs.push({ url: matchLink, is_home, weatherCell: tdWeather, fwdsCell: tdFwds, defCell: tdDef });
       }
     });
     console.log(`[RosterMatches] cache hits: ${rows.length - jobs.length}, jobs to fetch: ${jobs.length}`);
@@ -315,7 +368,7 @@
             if (html) {
               const data = parseMatchData(html);
               // Кэшируем
-              setMatchCache(job.url, data.weather, data.fwdsHome, data.fwdsAway);
+              setMatchCache(job.url, data.weather, data.fwdsHome, data.fwdsAway, data.defHome, data.defAway);
               // Погода
               if (data.weather) {
                 const icon = setWeatherIcon(data.weather);
@@ -331,6 +384,12 @@
                 job.fwdsCell.style.backgroundColor = fwds > 3 ? "#ffe0e0" : "#e0ffe0";
               } else {
                 job.fwdsCell.textContent = "N/A";
+              }
+              // Тип защиты
+              const def = job.is_home ? data.defHome : data.defAway;
+              if (def) {
+                job.defCell.textContent = def;
+                job.defCell.style.backgroundColor = def === 'з' ? '#ffe0e0' : '#e0ffe0';
               }
             } else if (job.retries < MAX_RETRIES) {
               job.retries++;
@@ -348,6 +407,167 @@
       work();
     }
   }
+
+  function cleanOpponentNames() {
+    try {
+    var FED = {
+      'Австралия':1,'Австрия':2,'Азербайджан':3,'Албания':4,'Алжир':5,
+      'Американские Виргинские о-ва':218,'Американское Самоа':206,'Ангилья':214,
+      'Англия':6,'Ангола':7,'Андорра':8,'Антигуа и Барбуда':190,
+      'Аргентина':10,'Армения':11,'Аруба':188,'Афганистан':12,
+      'Багамские о-ва':192,'Бангладеш':13,'Барбадос':14,'Бахрейн':15,
+      'Беларусь':16,'Белиз':17,'Бельгия':18,'Бенин':22,
+      'Бермудские о-ва':19,'Болгария':20,'Боливия':21,'Босния и Герцеговина':23,
+      'Ботсвана':24,'Бразилия':25,'Британские Виргинские о-ва':195,'Бруней':26,
+      'Буркина Фасо':27,'Буркина-Фасо':27,'Бурунди':28,'Бутан':198,'Вануату':29,
+      'Венгрия':30,'Венесуэла':31,'Восточный Тимор':215,'Вьетнам':181,
+      'Габон':32,'Гаити':184,'Гайана':37,'Гамбия':33,
+      'Гана':34,'Гваделупа':35,'Гватемала':36,'Гвиана':220,
+      'Гвинея':38,'Гвинея-Бисау':39,'Германия':40,'Гибралтар':41,
+      'Гондурас':43,'Гонконг':44,'Гренада':45,'Греция':47,
+      'Грузия':48,'Гуам':182,'Дания':49,'Джибути':51,
+      'Доминика':52,'Доминиканская Республика':185,'ДР Конго':54,'Египет':53,
+      'Замбия':55,'Зимбабве':56,'Израиль':57,'Индия':179,
+      'Индонезия':58,'Иордания':59,'Ирак':60,'Иран':61,
+      'Ирландия':62,'Исландия':63,'Испания':64,'Италия':65,
+      'Йемен':66,'Кабо-Верде':67,'Казахстан':68,'Каймановы о-ва':186,
+      'Камбоджа':69,'Камерун':70,'Канада':71,'Катар':72,
+      'Кения':73,'Кипр':74,'Китай':75,'КНДР':130,
+      'Колумбия':76,'Коморские о-ва':209,'Конго':77,'Коста-Рика':78,
+      "Кот-д'Ивуар":79,'Кот-Дивуар':79,'Куба':80,'Кувейт':81,'Кыргызстан':82,
+      'Кюрасао':9,'Лаос':83,'Латвия':84,'Лесото':85,
+      'Либерия':86,'Ливан':87,'Ливия':88,'Литва':89,
+      'Лихтенштейн':90,'Люксембург':91,'Маврикий':199,'Мавритания':92,
+      'Мадагаскар':93,'Макао':210,'Малави':95,'Малайзия':96,
+      'Мали':97,'Мальдивы':98,'Мальта':99,'Марокко':100,
+      'Мартиника':204,'Мексика':101,'Мозамбик':103,'Молдова':104,
+      'Монголия':106,'Монтсеррат':216,'Мьянма':183,'Намибия':107,
+      'Непал':108,'Нигер':109,'Нигерия':110,'Нидерланды':42,
+      'Никарагуа':111,'Новая Зеландия':113,'Новая Каледония':205,'Норвегия':114,
+      'О-ва Кука':115,'ОАЭ':178,'Оман':116,'Пакистан':117,
+      'Палестина':211,'Панама':118,'Папуа Новая Гвинея':112,'Парагвай':119,
+      'Перу':120,'Польша':121,'Португалия':122,'Пуэрто-Рико':123,
+      'Реюньон':208,'Россия':124,'Руанда':125,'Румыния':126,
+      'Сальвадор':127,'Самоа':196,'Сан-Марино':128,
+      'Саудовская Аравия':129,'Северная Ирландия':131,'Северная Македония':94,
+      'Сейшельские о-ва':180,'Сенегал':132,'Сент-Винсент':133,
+      'Сент-Винсент и Гренадины':133,'Сент-Китс и Невис':187,'Сент-Люсия':194,
+      'Сербия':174,'Сингапур':134,'Сирия':135,'Словакия':136,
+      'Словения':137,'Соломоновы о-ва':200,'Сомали':138,'Судан':139,
+      'Суринам':140,'США':141,'Сьерра Леоне':142,'Таджикистан':143,
+      'Таиланд':145,'Таити':201,'Тайвань':212,'Танзания':146,
+      'Теркс и Кайкос':213,'Того':147,'Тонга':202,'Тринидад и Тобаго':148,
+      'Тувалу':219,'Тунис':149,'Туркменистан':150,'Турция':151,
+      'Уганда':152,'Узбекистан':153,'Украина':154,'Уругвай':155,
+      'Уэльс':156,'Фареры':157,'Фиджи':191,'Филиппины':158,
+      'Финляндия':159,'Франция':160,'Хорватия':161,'ЦАР':162,
+      'Чад':193,'Черногория':189,'Чехия':163,'Чили':164,
+      'Швейцария':165,'Швеция':166,'Шотландия':167,'Шри Ланка':168,'Шри-Ланка':168,
+      'Эквадор':169,'Экваториальная Гвинея':203,'Эритрея':170,'Эсватини':197,
+      'Эстония':171,'Эфиопия':172,'ЮАР':173,'Южная Корея':175,
+      'Южный Судан':217,'Ямайка':176,'Япония':177,'Бонэйр':195
+    };
+    var FED_GEN = {
+      'России':124,'Украины':154,'Беларуси':16,'Польши':121,'Германии':40,
+      'Франции':160,'Испании':64,'Италии':65,'Англии':6,'Португалии':122,
+      'Нидерландов':42,'Бельгии':18,'Швеции':166,'Норвегии':114,'Дании':49,
+      'Финляндии':159,'Чехии':163,'Словакии':136,'Австрии':2,'Швейцарии':165,
+      'Хорватии':161,'Сербии':174,'Греции':47,'Турции':151,'Румынии':126,
+      'Болгарии':20,'Венгрии':30,'Шотландии':167,'Ирландии':62,'Исландии':63,
+      'Словении':137,'Боснии и Герцеговины':23,'Черногории':189,'Северной Македонии':94,
+      'Албании':4,'Литвы':89,'Латвии':84,'Эстонии':171,'Молдовы':104,
+      'Грузии':48,'Армении':11,'Азербайджана':3,'Кипра':74,'Люксембурга':91,
+      'Мальты':99,'Казахстана':68,'Бразилии':25,'Аргентины':10,'Мексики':101,
+      'Колумбии':76,'Уругвая':155,'Парагвая':119,'Эквадора':169,'Венесуэлы':31,
+      'Боливии':21,'Канады':71,'Коста-Рики':78,'Панамы':118,'Гондураса':43,
+      'Сальвадора':127,'Ямайки':176,'Гватемалы':36,'Кубы':80,
+      'Тринидада и Тобаго':148,'Суринама':140,'Гайаны':37,'Белиза':17,
+      'Барбадоса':14,'Гренады':45,'Доминики':52,'Монтсеррата':216,'Арубы':188,
+      'Мартиники':204,'Гваделупы':35,'Японии':177,'Южной Кореи':175,'Китая':75,
+      'Ирана':61,'Саудовской Аравии':129,'Австралии':1,'Узбекистана':153,
+      'Ирака':60,'Катара':72,'Таиланда':145,'Вьетнама':181,'Индии':179,
+      'Индонезии':58,'Малайзии':96,'Сингапура':134,'Филиппин':158,
+      'Бахрейна':15,'Иордании':59,'Омана':116,'Кувейта':81,'Сирии':135,
+      'Палестины':211,'Ливана':87,'Кыргызстана':82,'Таджикистана':143,
+      'Туркменистана':150,'Монголии':106,'Камбоджи':69,'Лаоса':83,
+      'Непала':108,'Бангладеша':13,'Шри-Ланки':168,'Тайваня':212,
+      'Гонконга':44,'Папуа Новой Гвинеи':112,'Тонги':202,'Египта':53,
+      'Нигерии':110,'Камеруна':70,'Ганы':34,"Кот-д'Ивуара":79,
+      'Сенегала':132,'Туниса':149,'Алжира':5,'Замбии':55,'Кении':73,
+      'Уганды':152,'Танзании':146,'Мозамбика':103,'Эфиопии':172,'Анголы':7,
+      'Габона':32,'Гвинеи':38,'Ливии':88,'Мадагаскара':93,
+      'Новой Зеландии':113,'Израиля':57,'Уэльса':156,'Северной Ирландии':131,
+      'Пакистана':117,'Эритреи':170,'Реюньона':208
+    };
+    function makeFlagImg(fedId, country) {
+      var img = document.createElement('img');
+      img.src = '/cntr/' + fedId + '.gif';
+      img.title = country;
+      img.alt = '';
+      img.style.cssText = 'vertical-align:top; margin:3px 3px 0 0; width:20px; height:14px; border:0';
+      return img;
+    }
+    var homeFedId = null;
+    var champLinks = document.querySelectorAll('a[title*="Чемпионат"]');
+    for (var ci = 0; ci < champLinks.length; ci++) {
+      var champMatch = champLinks[ci].getAttribute('title').match(/Чемпионат\s+(.+?),/);
+      if (champMatch) {
+        var fid = FED[champMatch[1].trim()] || FED_GEN[champMatch[1].trim()];
+        if (fid) { homeFedId = fid; break; }
+      }
+    }
+    var matchesTable = null;
+    var tables = document.querySelectorAll('table.tbl');
+    for (var ti = 0; ti < tables.length; ti++) {
+      var header = tables[ti].querySelector('tr[bgcolor="#006600"]');
+      if (header && /Дата/i.test(header.textContent)) { matchesTable = tables[ti]; break; }
+    }
+    if (!matchesTable) return;
+    var links = matchesTable.querySelectorAll('a[href*="roster.php"]');
+    if (!links || !links.length) return;
+    // Left-align opponent cells and remove empty spacer divs
+    for (var li = 0; li < links.length; li++) {
+      var td = links[li].closest('td');
+      if (td) {
+        td.style.textAlign = 'left';
+        var spacers = td.querySelectorAll('div[style*="float:left"][style*="width:16px"]');
+        for (var si = spacers.length - 1; si >= 0; si--) spacers[si].remove();
+      }
+    }
+    for (var i = 0; i < links.length; i++) {
+      var link = links[i];
+      if (link.previousElementSibling && link.previousElementSibling.tagName === 'IMG' &&
+          link.previousElementSibling.src && link.previousElementSibling.src.includes('/cntr/')) continue;
+      var text = link.textContent.trim();
+      var match = text.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+      var teamName, fedId;
+      if (match) {
+        teamName = match[1].trim();
+        var parts = match[2].trim().split(',');
+        fedId = FED[parts[parts.length - 1].trim()];
+        if (fedId) {
+          // Country found in brackets — remove brackets, show foreign flag
+          link.textContent = teamName;
+        } else {
+          // Brackets contain city, not country — keep text, use home flag
+          teamName = text;
+          fedId = homeFedId;
+        }
+      } else {
+        teamName = text;
+        fedId = homeFedId;
+      }
+      if (fedId) {
+        var countryName = '';
+        for (var key in FED) { if (FED[key] === fedId) { countryName = key; break; } }
+        link.parentNode.insertBefore(makeFlagImg(fedId, countryName), link);
+      }
+    }
+    } catch (e) {
+      console.error('[cleanOpponentNames] error:', e);
+    }
+  }
+
 
 function enhanceRosterStatsPage() {
     const teamNum = (location.search.match(/num=(\d+)/) || [])[1] || '2647';
@@ -580,23 +800,19 @@ function render() {
     
     const url = `${SITE_CONFIG.BASE_URL}/roster.php?num=${teamId}`;
     
-    // fetch() вместо GM_xmlhttpRequest — запрос идёт от имени страницы
-    // с правильными куками, referer и origin (неотличимо от навигации)
-    fetch(url, { credentials: 'same-origin' })
-      .then(r => r.ok ? r.text() : Promise.reject(r.status))
-      .then(html => {
-        const abilities = extractAbilities(html);
-        if (abilities) {
-          const sunnySum = abilities.д + abilities.пк + abilities.км;
-          const rainySum = abilities.г + abilities.ск + abilities.пд;
-          const school = detectSchool(sunnySum, rainySum);
-          setSchoolCache(teamId, school);
-          callback(school);
-        } else {
-          callback('');
-        }
-      })
-      .catch(() => callback(''));
+    httpGet(url, (err, html) => {
+      if (err || !html) { callback(''); return; }
+      const abilities = extractAbilities(html);
+      if (abilities) {
+        const sunnySum = abilities.д + abilities.пк + abilities.км;
+        const rainySum = abilities.г + abilities.ск + abilities.пд;
+        const school = detectSchool(sunnySum, rainySum);
+        setSchoolCache(teamId, school);
+        callback(school);
+      } else {
+        callback('');
+      }
+    });
   }
 
   // Кэш данных матчей (погода + Нпд)
@@ -616,10 +832,10 @@ function render() {
     } catch { return {}; }
   }
 
-  function setMatchCache(matchUrl, weather, fwdsHome, fwdsAway) {
+  function setMatchCache(matchUrl, weather, fwdsHome, fwdsAway, defHome, defAway) {
     try {
       const cache = getMatchCache();
-      cache[matchUrl] = { weather, fwdsHome, fwdsAway, time: Date.now() };
+      cache[matchUrl] = { weather, fwdsHome, fwdsAway, defHome, defAway, time: Date.now() };
       localStorage.setItem(MATCH_CACHE_KEY, JSON.stringify(cache));
     } catch {}
   }
@@ -634,7 +850,9 @@ function render() {
     const weather = parseWeatherFromMatch(html);
     const fwdsHome = parseFwdsFromHtml(doc, true);
     const fwdsAway = parseFwdsFromHtml(doc, false);
-    return { weather, fwdsHome, fwdsAway };
+    const defHome = parseDefenseType(doc, true);
+    const defAway = parseDefenseType(doc, false);
+    return { weather, fwdsHome, fwdsAway, defHome, defAway };
   }
 
   // Предзагрузка матчей при открытии roster.php
@@ -1244,20 +1462,21 @@ function render() {
   }
 
 const href = location.href;
+  console.log('[VSOL] href:', href);
   if (href.includes('/roster.php') && !href.includes('/roster_m.php') && !href.includes('/roster_s.php')) {
     prefetchMatchData();
   } else if (href.includes('/roster_m.php')) {
+    cleanOpponentNames();
     enhanceRosterMatchesPage();
   } else if (href.includes('/roster_s.php')) {
     enhanceRosterStatsPage();
-  }
-    else if (href.includes('/managerzone.php')) {
-        if(href.includes('pm=3')) {
-            enhanceRosterStatsPage();
-        }
-        else if(href.includes('pm=2')) {
-            enhanceRosterMatchesPage();
-        }
+  } else if (href.includes('/managerzone.php')) {
+    if (href.includes('pm=3')) {
+      enhanceRosterStatsPage();
+    } else if (href.includes('pm=2')) {
+      cleanOpponentNames();
+      enhanceRosterMatchesPage();
+    }
   } else if (href.includes('/mng_asktoplay.php')) {
     enhanceAskToPlayPage();
   } else if (href.includes('/teams_cntr.php')) {
@@ -1267,7 +1486,9 @@ const href = location.href;
   } else if (location.hostname.includes('transfermarkt.')) {
     initTransfermarkt();
   } else if (href.includes('/fed_news.php')) {
+    initPlayedNationalTeamMatches();
     initNationalTeamMatches();
+    initInterseasonCupResults();
   }
 
   // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
@@ -1428,6 +1649,898 @@ const href = location.href;
       table.parentNode.insertBefore(div, table);
     }
     GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
+  }
+
+  // ========== Interseason Cup Results (fed_news.php) ==========
+
+  function initInterseasonCupResults() {
+    function parseCupTable(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const headerRow = doc.querySelector('tr[bgcolor="#006600"]');
+      if (!headerRow) return { headers: [], entries: [] };
+
+      const headerCells = headerRow.querySelectorAll('td');
+      const headers = [];
+      for (const cell of headerCells) {
+        headers.push(cell.textContent.trim());
+      }
+
+      const entries = [];
+      const allRows = doc.querySelectorAll('tr');
+      for (const row of allRows) {
+        if (row === headerRow) continue;
+        const cells = row.querySelectorAll('td');
+        if (cells.length < 6) continue;
+
+        // Column 0 is № (row number), Column 1 is Див, Column 2 is №№
+        const rowNum = cells[0]?.textContent.trim().replace(/\.$/, '');
+        const div = cells[1]?.textContent.trim();
+        const nnText = cells[2]?.textContent.replace(/[^0-9]/g, '');
+        const nn = parseInt(nnText, 10);
+        if (isNaN(nn)) continue;
+
+        // Find team name cell — the one containing an <a> with href to roster.php
+        var teamName = '';
+        var teamHref = '';
+        for (var ci = 3; ci < cells.length; ci++) {
+          var link = cells[ci].querySelector('a[href*="roster.php"]');
+          if (link) {
+            teamName = link.textContent.trim();
+            teamHref = link.getAttribute('href') || '';
+            break;
+          }
+        }
+        if (!teamName) continue;
+
+        // Stats columns start after the team name cell (ci+1)
+        const cols = [];
+        for (let i = ci + 1; i < cells.length; i++) {
+          cols.push(cells[i].textContent.trim());
+        }
+
+        entries.push({ nn, rowNum, div, teamName, teamLink: teamHref, cols });
+      }
+
+      return { headers, entries };
+    }
+
+    function filterAndSort(entries) {
+      return entries
+        .filter(function (e) { return e.nn >= 1 && e.nn <= 100; })
+        .sort(function (a, b) { return a.nn - b.nn; });
+    }
+
+    function formatBBCode(entries, headers) {
+      var lines = [];
+      var headerCells = headers.map(function(h) { return '[td]' + h + '[/td]'; }).join('');
+      lines.push('[tr]' + headerCells + '[/tr]');
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        var link = e.teamLink;
+        if (link && !link.startsWith('http')) {
+          link = SITE_CONFIG.BASE_URL + '/' + link.replace(/^\//, '');
+        }
+        var teamCell = '[a href=' + link + ' target="_blank"]' + e.teamName + '[/a]';
+        var parts = [e.rowNum || String(i + 1), e.div || '', String(e.nn), teamCell];
+        for (var j = 0; j < e.cols.length; j++) {
+          parts.push(e.cols[j]);
+        }
+        var rowCells = parts.map(function(p) { return '[td]' + p + '[/td]'; }).join('');
+        lines.push('[tr]' + rowCells + '[/tr]');
+      }
+      return '[table width="100%"]\n' + lines.join('\n') + '\n[/table]';
+    }
+
+    function insertIntoMemo(text) {
+      var memo = document.getElementById('memo');
+      if (!memo) return;
+      memo.value = memo.value ? memo.value + '\n\n' + text : text;
+      memo.dispatchEvent(new Event('change'));
+      if (typeof preview === 'function') preview();
+    }
+
+    function fetchCurrentSeason(callback) {
+      var url = SITE_CONFIG.BASE_URL + '/roster_m.php';
+      httpGet(url, function(err, html) {
+        if (err || !html) { callback(null); return; }
+        var match = html.match(/season=(\d+)/);
+        callback(match ? match[1] : null);
+      });
+    }
+
+    // --- Entry point ---
+    var urlParams = new URLSearchParams(window.location.search);
+    var nationId = urlParams.get('nation_id');
+    if (!nationId) return;
+
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Итоги Кубка Межсезонья';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+      fetchCurrentSeason(function(season) {
+        if (!season) {
+          alert('Ошибка: не удалось определить текущий сезон');
+          btn.textContent = 'Итоги Кубка Межсезонья';
+          return;
+        }
+        var cupUrl = SITE_CONFIG.BASE_URL + '/cupm_table.php?season=' + season + '&div=1&sort=' + nationId;
+        httpGet(cupUrl, function(err, html) {
+          if (err || !html) {
+            alert('Ошибка загрузки таблицы Кубка Межсезонья');
+            btn.textContent = 'Итоги Кубка Межсезонья';
+            return;
+          }
+          var result = parseCupTable(html);
+          var filtered = filterAndSort(result.entries);
+          var bbcode = formatBBCode(filtered, result.headers);
+          insertIntoMemo(bbcode);
+          btn.textContent = 'Итоги Кубка Межсезонья';
+        });
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
+  }
+
+  // ========== Played National Team Matches (fed_news.php) ==========
+
+  function initPlayedNationalTeamMatches() {
+    // --- Constants ---
+    var TEAM_TYPES = [
+      { type: 0, name: 'Национальная', suffix: '(нац.)' },
+      { type: 1, name: 'Молодёжная',   suffix: '(мол.)' },
+      { type: 2, name: 'Юношеская',    suffix: '(юн.)' }
+    ];
+
+    // --- Pure functions (copied from src/ modules) ---
+
+    function parseNationNum(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var link = doc.querySelector('a[href*="nation.php?num="]');
+      if (link) {
+        var m = link.getAttribute('href').match(/num=(\d+)/);
+        if (m) return m[1];
+      }
+      return null;
+    }
+
+    function parseGroupTable(html, fedNationNum) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var headerRows = doc.querySelectorAll('tr[bgcolor="#006600"]');
+      var targetTable = null;
+      for (var hi = 0; hi < headerRows.length; hi++) {
+        var text = headerRows[hi].textContent;
+        if (!text.includes('Команда')) continue;
+        var parentTable = headerRows[hi].closest('table');
+        if (!parentTable) continue;
+        var nationLink = parentTable.querySelector('a[href*="nation.php?num=' + fedNationNum + '"]');
+        if (nationLink) {
+          targetTable = parentTable;
+          break;
+        }
+      }
+      if (!targetTable) return null;
+      var headerRow = targetTable.querySelector('tr[bgcolor="#006600"]');
+      if (!headerRow) return null;
+      var headerCells = headerRow.querySelectorAll('td');
+      var headers = [];
+      for (var hci = 0; hci < headerCells.length; hci++) {
+        headers.push(headerCells[hci].textContent.trim());
+      }
+      if (headers.length < 3) return null;
+      var rows = [];
+      var highlightIndex = -1;
+      var allRows = targetTable.querySelectorAll('tr');
+      for (var ri = 0; ri < allRows.length; ri++) {
+        var row = allRows[ri];
+        if (row === headerRow) continue;
+        var cells = row.querySelectorAll('td');
+        if (cells.length < 3) continue;
+        var teamName = '';
+        var teamLink = '';
+        var linkCellIndex = -1;
+        for (var ci = 0; ci < cells.length; ci++) {
+          var lnk = cells[ci].querySelector('a[href*="nation.php"]');
+          if (lnk) {
+            teamName = lnk.textContent.trim();
+            teamLink = lnk.getAttribute('href') || '';
+            linkCellIndex = ci;
+            break;
+          }
+        }
+        if (!teamName || linkCellIndex < 0) continue;
+        var position = cells[0].textContent.trim().replace(/\.$/, '');
+        var stats = [];
+        for (var si = linkCellIndex + 1; si < cells.length; si++) {
+          stats.push(cells[si].textContent.trim());
+        }
+        var isCurrentFed = teamLink.includes('num=' + fedNationNum);
+        if (isCurrentFed) highlightIndex = rows.length;
+        rows.push({ position: position, teamName: teamName, teamLink: teamLink, stats: stats, isCurrentFed: isCurrentFed });
+      }
+      if (rows.length === 0) return null;
+      return { headers: headers, rows: rows, highlightIndex: highlightIndex };
+    }
+
+    function extractCountryFromHeader(doc) {
+      var hdr = doc.querySelector('td.hdr2l a');
+      if (hdr) {
+        var text = hdr.textContent.trim();
+        var cleaned = text.replace(/\s*\([^)]+\)\s*$/, '').trim();
+        if (cleaned) return cleaned;
+      }
+      var hdrCells = doc.querySelectorAll('[class*="hdr2l"]');
+      for (var i = 0; i < hdrCells.length; i++) {
+        var link = hdrCells[i].querySelector('a');
+        if (link) {
+          var t = link.textContent.trim();
+          var c = t.replace(/\s*\([^)]+\)\s*$/, '').trim();
+          if (c) return c;
+        }
+      }
+      return '';
+    }
+
+    function parsePlayedMatch(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var allLinks = doc.querySelectorAll('a[href*="viewmatch.php"]');
+      var viewMatchLink = null;
+      for (var li = 0; li < allLinks.length; li++) {
+        var h = allLinks[li].getAttribute('href') || '';
+        if (h.includes('previewmatch.php')) continue;
+        viewMatchLink = allLinks[li];
+        break;
+      }
+      if (!viewMatchLink) return null;
+      var matchUrl = viewMatchLink.getAttribute('href') || '';
+      var score = viewMatchLink.textContent.trim();
+      var parentDiv = viewMatchLink.closest('div');
+      var country2 = '';
+      var isAway = false;
+      if (parentDiv) {
+        var divText = parentDiv.textContent;
+        if (/- Г -/.test(divText)) {
+          isAway = true;
+        }
+        var opponentLink = parentDiv.querySelector('a[href*="nation.php?num="]');
+        if (opponentLink) {
+          var opponentText = opponentLink.textContent.trim();
+          country2 = opponentText.replace(/\s*\((?:юн|мол|нац)\.?\)\s*$/, '').trim();
+        }
+      }
+      var country1 = extractCountryFromHeader(doc);
+      if (!matchUrl || !score) return null;
+      return { matchUrl: matchUrl, country1: country1, country2: country2, score: score, isAway: isAway };
+    }
+
+    function parseWorldcupLink(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var link = doc.querySelector('a[href*="worldcup.php"]');
+      if (!link) return null;
+      var href = link.getAttribute('href') || '';
+      var hashIndex = href.indexOf('#');
+      if (hashIndex !== -1) {
+        href = href.substring(0, hashIndex);
+      }
+      return href || null;
+    }
+
+    function isoToFlagEmoji(iso) {
+      if (iso === 'ENGLAND') return '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}';
+      if (iso === 'SCOTLAND') return '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}';
+      if (iso === 'WALES') return '\u{1F3F4}\u{E0067}\u{E0062}\u{E0077}\u{E006C}\u{E0073}\u{E007F}';
+      if (iso === 'NIR') return '\u{1F3F4}\u{E0067}\u{E0062}\u{E006E}\u{E0069}\u{E0072}\u{E007F}';
+      var upper = iso.toUpperCase();
+      return String.fromCodePoint(
+        0x1F1E6 + upper.charCodeAt(0) - 65,
+        0x1F1E6 + upper.charCodeAt(1) - 65
+      );
+    }
+
+    var COUNTRY_ISO = {
+      'Россия': 'RU', 'России': 'RU',
+      'Украина': 'UA', 'Украины': 'UA',
+      'Беларусь': 'BY', 'Беларуси': 'BY',
+      'Польша': 'PL', 'Польши': 'PL',
+      'Германия': 'DE', 'Германии': 'DE',
+      'Франция': 'FR', 'Франции': 'FR',
+      'Испания': 'ES', 'Испании': 'ES',
+      'Италия': 'IT', 'Италии': 'IT',
+      'Англия': 'ENGLAND', 'Англии': 'ENGLAND',
+      'Португалия': 'PT', 'Португалии': 'PT',
+      'Нидерланды': 'NL', 'Нидерландов': 'NL',
+      'Бельгия': 'BE', 'Бельгии': 'BE',
+      'Швеция': 'SE', 'Швеции': 'SE',
+      'Норвегия': 'NO', 'Норвегии': 'NO',
+      'Дания': 'DK', 'Дании': 'DK',
+      'Финляндия': 'FI', 'Финляндии': 'FI',
+      'Чехия': 'CZ', 'Чехии': 'CZ',
+      'Словакия': 'SK', 'Словакии': 'SK',
+      'Австрия': 'AT', 'Австрии': 'AT',
+      'Швейцария': 'CH', 'Швейцарии': 'CH',
+      'Хорватия': 'HR', 'Хорватии': 'HR',
+      'Сербия': 'RS', 'Сербии': 'RS',
+      'Греция': 'GR', 'Греции': 'GR',
+      'Турция': 'TR', 'Турции': 'TR',
+      'Румыния': 'RO', 'Румынии': 'RO',
+      'Болгария': 'BG', 'Болгарии': 'BG',
+      'Венгрия': 'HU', 'Венгрии': 'HU',
+      'Шотландия': 'SCOTLAND', 'Шотландии': 'SCOTLAND',
+      'Ирландия': 'IE', 'Ирландии': 'IE',
+      'Исландия': 'IS', 'Исландии': 'IS',
+      'Словения': 'SI', 'Словении': 'SI',
+      'Босния и Герцеговина': 'BA', 'Боснии и Герцеговины': 'BA',
+      'Черногория': 'ME', 'Черногории': 'ME',
+      'Северная Македония': 'MK', 'Северной Македонии': 'MK',
+      'Албания': 'AL', 'Албании': 'AL',
+      'Литва': 'LT', 'Литвы': 'LT',
+      'Латвия': 'LV', 'Латвии': 'LV',
+      'Эстония': 'EE', 'Эстонии': 'EE',
+      'Молдова': 'MD', 'Молдовы': 'MD',
+      'Грузия': 'GE', 'Грузии': 'GE',
+      'Армения': 'AM', 'Армении': 'AM',
+      'Азербайджан': 'AZ', 'Азербайджана': 'AZ',
+      'Кипр': 'CY', 'Кипра': 'CY',
+      'Люксембург': 'LU', 'Люксембурга': 'LU',
+      'Мальта': 'MT', 'Мальты': 'MT',
+      'Казахстан': 'KZ', 'Казахстана': 'KZ',
+      'Бразилия': 'BR', 'Бразилии': 'BR',
+      'Аргентина': 'AR', 'Аргентины': 'AR',
+      'Мексика': 'MX', 'Мексики': 'MX',
+      'США': 'US',
+      'Колумбия': 'CO', 'Колумбии': 'CO',
+      'Чили': 'CL',
+      'Уругвай': 'UY', 'Уругвая': 'UY',
+      'Перу': 'PE',
+      'Парагвай': 'PY', 'Парагвая': 'PY',
+      'Эквадор': 'EC', 'Эквадора': 'EC',
+      'Венесуэла': 'VE', 'Венесуэлы': 'VE',
+      'Боливия': 'BO', 'Боливии': 'BO',
+      'Канада': 'CA', 'Канады': 'CA',
+      'Коста-Рика': 'CR', 'Коста-Рики': 'CR',
+      'Панама': 'PA', 'Панамы': 'PA',
+      'Гондурас': 'HN', 'Гондураса': 'HN',
+      'Сальвадор': 'SV', 'Сальвадора': 'SV',
+      'Ямайка': 'JM', 'Ямайки': 'JM',
+      'Гватемала': 'GT', 'Гватемалы': 'GT',
+      'Никарагуа': 'NI',
+      'Куба': 'CU', 'Кубы': 'CU',
+      'Тринидад и Тобаго': 'TT', 'Тринидада и Тобаго': 'TT',
+      'Гаити': 'HT',
+      'Доминиканская Республика': 'DO', 'Доминиканской Республики': 'DO',
+      'Суринам': 'SR', 'Суринама': 'SR',
+      'Гайана': 'GY', 'Гайаны': 'GY',
+      'Белиз': 'BZ', 'Белиза': 'BZ',
+      'Барбадос': 'BB', 'Барбадоса': 'BB',
+      'Гренада': 'GD', 'Гренады': 'GD',
+      'Багамские о-ва': 'BS',
+      'Антигуа и Барбуда': 'AG',
+      'Сент-Люсия': 'LC',
+      'Сент-Винсент и Гренадины': 'VC',
+      'Сент-Китс и Невис': 'KN',
+      'Доминика': 'DM', 'Доминики': 'DM',
+      'Монтсеррат': 'MS', 'Монтсеррата': 'MS',
+      'Аруба': 'AW', 'Арубы': 'AW',
+      'Кюрасао': 'CW',
+      'Бонэйр': 'BQ',
+      'Каймановы о-ва': 'KY',
+      'Бермудские о-ва': 'BM',
+      'Пуэрто-Рико': 'PR',
+      'Мартиника': 'MQ', 'Мартиники': 'MQ',
+      'Гваделупа': 'GP', 'Гваделупы': 'GP',
+      'Американские Виргинские о-ва': 'VI',
+      'Британские Виргинские о-ва': 'VG',
+      'Япония': 'JP', 'Японии': 'JP',
+      'Южная Корея': 'KR', 'Южной Кореи': 'KR',
+      'Китай': 'CN', 'Китая': 'CN',
+      'Иран': 'IR', 'Ирана': 'IR',
+      'Саудовская Аравия': 'SA', 'Саудовской Аравии': 'SA',
+      'Австралия': 'AU', 'Австралии': 'AU',
+      'Узбекистан': 'UZ', 'Узбекистана': 'UZ',
+      'Ирак': 'IQ', 'Ирака': 'IQ',
+      'Катар': 'QA', 'Катара': 'QA',
+      'ОАЭ': 'AE',
+      'Таиланд': 'TH', 'Таиланда': 'TH',
+      'Вьетнам': 'VN', 'Вьетнама': 'VN',
+      'Индия': 'IN', 'Индии': 'IN',
+      'Индонезия': 'ID', 'Индонезии': 'ID',
+      'Малайзия': 'MY', 'Малайзии': 'MY',
+      'Сингапур': 'SG', 'Сингапура': 'SG',
+      'Филиппины': 'PH', 'Филиппин': 'PH',
+      'Бахрейн': 'BH', 'Бахрейна': 'BH',
+      'Иордания': 'JO', 'Иордании': 'JO',
+      'Оман': 'OM', 'Омана': 'OM',
+      'Кувейт': 'KW', 'Кувейта': 'KW',
+      'Сирия': 'SY', 'Сирии': 'SY',
+      'Палестина': 'PS', 'Палестины': 'PS',
+      'Ливан': 'LB', 'Ливана': 'LB',
+      'Кыргызстан': 'KG', 'Кыргызстана': 'KG',
+      'Таджикистан': 'TJ', 'Таджикистана': 'TJ',
+      'Туркменистан': 'TM', 'Туркменистана': 'TM',
+      'КНДР': 'KP',
+      'Мьянма': 'MM', 'Мьянмы': 'MM',
+      'Монголия': 'MN', 'Монголии': 'MN',
+      'Камбоджа': 'KH', 'Камбоджи': 'KH',
+      'Лаос': 'LA', 'Лаоса': 'LA',
+      'Непал': 'NP', 'Непала': 'NP',
+      'Бангладеш': 'BD', 'Бангладеша': 'BD',
+      'Шри-Ланка': 'LK', 'Шри-Ланки': 'LK',
+      'Тайвань': 'TW', 'Тайваня': 'TW',
+      'Гонконг': 'HK', 'Гонконга': 'HK',
+      'Макао': 'MO',
+      'Папуа Новая Гвинея': 'PG', 'Папуа Новой Гвинеи': 'PG',
+      'Тонга': 'TO', 'Тонги': 'TO',
+      'Египет': 'EG', 'Египта': 'EG',
+      'Нигерия': 'NG', 'Нигерии': 'NG',
+      'ЮАР': 'ZA',
+      'Камерун': 'CM', 'Камеруна': 'CM',
+      'Гана': 'GH', 'Ганы': 'GH',
+      "Кот-д'Ивуар": 'CI', "Кот-д'Ивуара": 'CI',
+      'Сенегал': 'SN', 'Сенегала': 'SN',
+      'Тунис': 'TN', 'Туниса': 'TN',
+      'Алжир': 'DZ', 'Алжира': 'DZ',
+      'Марокко': 'MA',
+      'Мали': 'ML',
+      'Конго': 'CG',
+      'ДР Конго': 'CD',
+      'Замбия': 'ZM', 'Замбии': 'ZM',
+      'Зимбабве': 'ZW',
+      'Кения': 'KE', 'Кении': 'KE',
+      'Уганда': 'UG', 'Уганды': 'UG',
+      'Танзания': 'TZ', 'Танзании': 'TZ',
+      'Мозамбик': 'MZ', 'Мозамбика': 'MZ',
+      'Эфиопия': 'ET', 'Эфиопии': 'ET',
+      'Ангола': 'AO', 'Анголы': 'AO',
+      'Буркина-Фасо': 'BF',
+      'Габон': 'GA', 'Габона': 'GA',
+      'Гвинея': 'GN', 'Гвинеи': 'GN',
+      'Ливия': 'LY', 'Ливии': 'LY',
+      'Мадагаскар': 'MG', 'Мадагаскара': 'MG',
+      'Новая Зеландия': 'NZ', 'Новой Зеландии': 'NZ',
+      'Фиджи': 'FJ',
+      'Самоа': 'WS',
+      'Вануату': 'VU',
+      'Израиль': 'IL', 'Израиля': 'IL',
+      'Уэльс': 'WALES', 'Уэльса': 'WALES',
+      'Северная Ирландия': 'NIR', 'Северной Ирландии': 'NIR',
+      'Реюньон': 'RE', 'Пакистан': 'PK', 'Пакистана': 'PK', 'Эритрея': 'ER', 'Эритреи': 'ER'
+    };
+
+    function getCountryFlag(countryName) {
+      var code = COUNTRY_ISO[countryName];
+      if (!code) return '';
+      return isoToFlagEmoji(code);
+    }
+
+    function formatGroupTableBBCode(tableData) {
+      var lines = [];
+      var headerCells = tableData.headers.map(function(h) { return '[td]' + h + '[/td]'; }).join('');
+      lines.push('[tr]' + headerCells + '[/tr]');
+      for (var i = 0; i < tableData.rows.length; i++) {
+        var r = tableData.rows[i];
+        var cellValues = [r.position, r.teamName];
+        for (var j = 0; j < r.stats.length; j++) {
+          cellValues.push(r.stats[j]);
+        }
+        var hl = (i === tableData.highlightIndex);
+        var rowCells = cellValues.map(function(c) {
+          return hl ? '[td bgcolor=#FFFFBF]' + c + '[/td]' : '[td]' + c + '[/td]';
+        }).join('');
+        lines.push('[tr]' + rowCells + '[/tr]');
+      }
+      return '[table width=70% align=center]\n' + lines.join('\n') + '\n[/table]';
+    }
+
+    function formatMatchLinkBBCode(matchData, typeName) {
+      var linkText = matchData.flag1 + ' ' + matchData.country1 + ' ' + typeName +
+        ' - ' + matchData.flag2 + ' ' + matchData.country2 + ' ' + typeName +
+        '  ' + matchData.score;
+      return '[table align=center border=0][tr][td]' +
+        '[a href=' + matchData.matchUrl + ' target="_blank"]' +
+        linkText +
+        '[/a]' +
+        '[/td][/tr][/table]';
+    }
+
+    function invertScore(score) {
+      var parts = score.split(':');
+      if (parts.length !== 2) return score;
+      return parts[1] + ':' + parts[0];
+    }
+
+    function parseMatchEvents(html) {
+      if (!html) return [];
+
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var rows = doc.querySelectorAll('tr[bgcolor="#c9f2c5"], tr[bgcolor="#eddac7"]');
+      var events = [];
+
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var event = parseEventRow(row);
+        if (event) {
+          events.push(event);
+        }
+      }
+
+      events.sort(function (a, b) {
+        return parseMinute(a.minute) - parseMinute(b.minute);
+      });
+
+      return events;
+    }
+
+    function detectEventType(row) {
+      var titleMap = {
+        'Гол': 'goal',
+        'Желтая карточка': 'yellow',
+        'Красная карточка': 'red',
+        'Замена': 'sub'
+      };
+
+      var imgs = row.querySelectorAll('img[title]');
+      for (var i = 0; i < imgs.length; i++) {
+        var title = imgs[i].getAttribute('title') || '';
+        if (titleMap[title]) return titleMap[title];
+      }
+
+      var tds = row.querySelectorAll('td[title]');
+      for (var j = 0; j < tds.length; j++) {
+        var tdTitle = tds[j].getAttribute('title') || '';
+        if (titleMap[tdTitle]) return titleMap[tdTitle];
+      }
+
+      var allTds = row.querySelectorAll('td');
+      for (var k = 0; k < allTds.length; k++) {
+        var style = allTds[k].getAttribute('style') || '';
+        if (style.indexOf('gol.gif') !== -1) return 'goal';
+        if (style.indexOf('zhk.gif') !== -1) return 'yellow';
+        if (style.indexOf('kk.gif') !== -1) return 'red';
+      }
+
+      return null;
+    }
+
+    function parseEventRow(row) {
+      var type = detectEventType(row);
+      if (type !== 'goal') return null;
+
+      var tds = row.querySelectorAll('td');
+      if (tds.length === 0) return null;
+
+      var minute = tds[0].textContent.trim();
+      if (!minute) return null;
+
+      var playerLinks = row.querySelectorAll('a.mnu');
+      if (playerLinks.length === 0) return null;
+
+      var playerName = playerLinks[0].textContent.trim();
+      if (!playerName) return null;
+
+      var score = tds[tds.length - 1].textContent.trim();
+
+      var descriptionBBCode = '';
+      for (var di = 0; di < tds.length; di++) {
+        if (tds[di].querySelector('a.mnu')) {
+          descriptionBBCode = convertDescriptionTobbcode(tds[di]);
+          break;
+        }
+      }
+
+      return {
+        type: type, minute: minute, playerName: playerName,
+        score: score || undefined,
+        descriptionBBCode: descriptionBBCode || undefined
+      };
+    }
+
+    function convertDescriptionTobbcode(td) {
+      var result = '';
+      for (var ci = 0; ci < td.childNodes.length; ci++) {
+        var node = td.childNodes[ci];
+        if (node.nodeType === 3) {
+          result += node.textContent;
+        } else if (node.nodeType === 1 && node.tagName === 'A') {
+          var href = node.getAttribute('href') || '';
+          if (href && !href.startsWith('http') && !href.startsWith('/')) {
+            href = '/' + href;
+          }
+          var text = node.textContent.trim();
+          result += '[a href=' + href + ' target="_blank"]' + text + '[/a]';
+        }
+      }
+      return result.trim();
+    }
+
+    function parseMinute(minuteStr) {
+      var parts = minuteStr.split('+');
+      var base = parseInt(parts[0], 10) || 0;
+      var extra = parts.length > 1 ? (parseInt(parts[1], 10) || 0) : 0;
+      return base + extra * 0.01;
+    }
+
+    function formatEventsSummaryBBCode(events) {
+      if (!events || events.length === 0) return '';
+
+      var lines = [];
+      for (var i = 0; i < events.length; i++) {
+        var e = events[i];
+        var desc = e.descriptionBBCode || e.playerName;
+        var text = '⚽ ' + e.minute + "' " + desc;
+        if (e.score) {
+          text += ' (' + e.score + ')';
+        }
+        lines.push('[table width=70% align=center border=0][tr][td align=center]' + text + '[/td][/tr][/table]');
+      }
+
+      return lines.join('\n');
+    }
+
+    function parseMatchStrength(html) {
+      if (!html) return null;
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var startRow = parseStrengthRow(doc, 'Сила в начале матча');
+      var endRow = parseStrengthRow(doc, 'Сила в конце матча');
+      if (!startRow && !endRow) return null;
+      return { start: startRow, end: endRow };
+    }
+
+    function parseStrengthRow(doc, labelText) {
+      var allTds = doc.querySelectorAll('td');
+      var labelTd = null;
+      for (var i = 0; i < allTds.length; i++) {
+        var td = allTds[i];
+        var text = '';
+        for (var j = 0; j < td.childNodes.length; j++) {
+          if (td.childNodes[j].nodeType === 3) text += td.childNodes[j].textContent;
+        }
+        if (text.trim() === labelText) { labelTd = td; break; }
+      }
+      if (!labelTd) return null;
+      var tr = labelTd.closest('tr');
+      if (!tr) return null;
+      var rdl = tr.querySelector('td.rdl');
+      var gdl = tr.querySelector('td.gdl');
+      if (!rdl || !gdl) return null;
+      var homeData = parseStrengthCell(rdl);
+      var awayData = parseStrengthCell(gdl);
+      if (!homeData || !awayData) return null;
+      return {
+        label: labelText,
+        homeValue: homeData.value, homePercent: homeData.percent,
+        awayValue: awayData.value, awayPercent: awayData.percent,
+        diff: awayData.value - homeData.value
+      };
+    }
+
+    function parseStrengthCell(td) {
+      var valueText = '';
+      for (var i = 0; i < td.childNodes.length; i++) {
+        if (td.childNodes[i].nodeType === 3) valueText += td.childNodes[i].textContent;
+      }
+      var value = parseInt(valueText.trim(), 10);
+      if (isNaN(value)) return null;
+      var boldEl = td.querySelector('b');
+      if (!boldEl) return null;
+      var percent = parseInt(boldEl.textContent.trim().replace('%', ''), 10);
+      if (isNaN(percent)) return null;
+      return { value: value, percent: percent };
+    }
+
+    function formatStrengthBBCode(strength) {
+      if (!strength) return '';
+      var lines = [];
+      if (strength.start) lines.push(formatStrengthRowBBCode(strength.start));
+      if (strength.end) lines.push(formatStrengthRowBBCode(strength.end));
+      return lines.join('\n');
+    }
+
+    function formatStrengthRowBBCode(row) {
+      // Home always left, away always right. Colors: weaker=red, stronger=green.
+      var diff = Math.abs(row.awayValue - row.homeValue);
+      var diffStr = diff > 0 ? '[small]+' + diff + '[/small]' : '';
+      var homeWidth = Math.max(row.homePercent - 10, 5);
+      var awayWidth = Math.max(row.awayPercent - 10, 5);
+
+      var homeBg, homeFg, awayBg, awayFg, homeDiff, awayDiff;
+      if (row.homeValue >= row.awayValue) {
+        // Home is stronger or equal
+        homeBg = '#87e878'; homeFg = '#060'; homeDiff = diffStr;
+        awayBg = '#ff967e'; awayFg = '#620'; awayDiff = '';
+      } else {
+        // Away is stronger
+        homeBg = '#ff967e'; homeFg = '#620'; homeDiff = '';
+        awayBg = '#87e878'; awayFg = '#060'; awayDiff = diffStr;
+      }
+
+      return '[table width=100%][tr]' +
+        '[td align=left]' + row.label + '[/td]' +
+        '[td bgcolor=' + homeBg + ' width=' + homeWidth + '% align=right][b][color=' + homeFg + ']' + row.homeValue + homeDiff + '[/color][/b][/td]' +
+        '[td bgcolor=' + awayBg + ' width=' + awayWidth + '%][b][color=' + awayFg + ']' + row.awayValue + awayDiff + '[/color][/b][/td]' +
+        '[/tr][/table]';
+    }
+
+    var SECTION_ORDER = ['Национальная', 'Молодёжная', 'Юношеская'];
+
+    function formatBBCodeReport(sections) {
+      var parts = [];
+      parts.push('[table width="100%" border=0][tr][td]НОВОСТИ СБОРНЫХ[/td][/tr][/table]');
+      parts.push('[hr]');
+      var sorted = sections.slice().sort(function(a, b) {
+        return SECTION_ORDER.indexOf(a.typeName) - SECTION_ORDER.indexOf(b.typeName);
+      });
+      for (var i = 0; i < sorted.length; i++) {
+        var section = sorted[i];
+        parts.push('[table width="100%" border=0][tr][td][b]' + section.typeName + '[/b][/td][/tr][/table]');
+        if (section.matchLinkBBCode) {
+          parts.push(section.matchLinkBBCode);
+        }
+        if (section.strengthBBCode) {
+          parts.push(section.strengthBBCode);
+        }
+        if (section.eventSummaryBBCode) {
+          parts.push(section.eventSummaryBBCode);
+        }
+        if (section.groupTableBBCode) {
+          if (section.eventSummaryBBCode || section.strengthBBCode) {
+            parts.push('');
+          }
+          parts.push(section.groupTableBBCode);
+        }
+        if (i < sorted.length - 1) {
+          parts.push('');
+        }
+      }
+      return parts.join('\n');
+    }
+
+    function insertIntoMemo(text) {
+      var memo = document.getElementById('memo');
+      if (!memo) return;
+      memo.value = memo.value ? memo.value + '\n\n' + text : text;
+      memo.dispatchEvent(new Event('change'));
+      if (typeof preview === 'function') preview();
+    }
+
+    // --- HTTP helpers (Promise wrappers around httpGet) ---
+
+    function fetchNationNum(fedId, type) {
+      return new Promise(function(resolve) {
+        var url = SITE_CONFIG.BASE_URL + '/fed_sborn.php?num=' + fedId + '&type=' + type;
+        httpGet(url, function(err, html) {
+          if (err || !html) { resolve(null); return; }
+          resolve(parseNationNum(html));
+        });
+      });
+    }
+
+    function fetchNationPage(nationNum) {
+      return new Promise(function(resolve) {
+        var url = SITE_CONFIG.BASE_URL + '/nation.php?num=' + nationNum;
+        httpGet(url, function(err, html) {
+          if (err || !html) { resolve(null); return; }
+          resolve(html);
+        });
+      });
+    }
+
+    function fetchWorldcupPage(worldcupUrl) {
+      return new Promise(function(resolve) {
+        httpGet(worldcupUrl, function(err, html) {
+          if (err || !html) { resolve(null); return; }
+          resolve(html);
+        });
+      });
+    }
+
+    function fetchViewmatchPage(viewmatchUrl) {
+      return new Promise(function(resolve) {
+        httpGet(viewmatchUrl, function(err, html) {
+          if (err || !html) { resolve(null); return; }
+          resolve(html);
+        });
+      });
+    }
+
+    // --- Entry point ---
+    var urlParams = new URLSearchParams(window.location.search);
+    var nationId = urlParams.get('nation_id');
+    if (!nationId) return;
+
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Сыгранный матч сборных';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = async function() {
+      btn.textContent = 'Загрузка...';
+      try {
+        var sections = [];
+        for (var ti = 0; ti < TEAM_TYPES.length; ti++) {
+          var tt = TEAM_TYPES[ti];
+          var nationNum = await fetchNationNum(nationId, tt.type);
+          if (!nationNum) continue;
+          await new Promise(function(r) { setTimeout(r, 400); });
+
+          var html = await fetchNationPage(nationNum);
+          if (!html) continue;
+          await new Promise(function(r) { setTimeout(r, 400); });
+
+          var worldcupUrl = parseWorldcupLink(html);
+          var matchData = parsePlayedMatch(html);
+
+          var groupTable = null;
+          if (worldcupUrl) {
+            var worldcupHtml = await fetchWorldcupPage(worldcupUrl);
+            if (worldcupHtml) {
+              groupTable = parseGroupTable(worldcupHtml, nationNum);
+            }
+            await new Promise(function(r) { setTimeout(r, 400); });
+          }
+
+          var groupTableBBCode = groupTable ? formatGroupTableBBCode(groupTable) : null;
+          var matchLinkBBCode = null;
+          var eventSummaryBBCode = null;
+          var strengthBBCode = null;
+
+          if (matchData) {
+            // If away, swap so home team (opponent) is on the left
+            if (matchData.isAway) {
+              var tmp = matchData.country1;
+              matchData.country1 = matchData.country2;
+              matchData.country2 = tmp;
+              matchData.score = invertScore(matchData.score);
+            }
+            matchData.flag1 = getCountryFlag(matchData.country1);
+            matchData.flag2 = getCountryFlag(matchData.country2);
+            matchData.typeSuffix = tt.suffix;
+            matchLinkBBCode = formatMatchLinkBBCode(matchData, tt.suffix);
+
+            var viewmatchHtml = await fetchViewmatchPage(matchData.matchUrl);
+            if (viewmatchHtml) {
+              var matchEvents = parseMatchEvents(viewmatchHtml);
+              eventSummaryBBCode = formatEventsSummaryBBCode(matchEvents) || null;
+
+              var strength = parseMatchStrength(viewmatchHtml);
+              strengthBBCode = formatStrengthBBCode(strength) || null;
+            }
+            await new Promise(function(r) { setTimeout(r, 400); });
+          }
+
+          sections.push({
+            typeName: tt.name,
+            groupTableBBCode: groupTableBBCode,
+            matchLinkBBCode: matchLinkBBCode,
+            eventSummaryBBCode: eventSummaryBBCode,
+            strengthBBCode: strengthBBCode
+          });
+        }
+
+        if (sections.length === 0) {
+          alert('Не удалось загрузить данные ни для одного типа сборной');
+        } else {
+          var report = formatBBCodeReport(sections);
+          insertIntoMemo(report);
+        }
+      } catch (e) {
+        console.error('[initPlayedNationalTeamMatches] error:', e);
+        alert('Ошибка загрузки данных сборных');
+      }
+      btn.textContent = 'Сыгранный матч сборных';
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 
   // ========== National Team Matches (fed_news.php) ==========
