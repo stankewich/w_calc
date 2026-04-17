@@ -35,6 +35,13 @@
 // @match        *://*.vfliga.com/teams_cntr.php*
 // @match        *://*.virtualsoccer.ru/realplayers.php*
 // @match        *://*.virtualsoccer.ru/fed_news.php*
+// @match        *://*.vfleague.com/fed_news.php*
+// @match        *://*.vfliga.ru/fed_news.php*
+// @match        *://*.vfliga.com/fed_news.php*
+// @match        *://*.virtualsoccer.ru/federation.php*
+// @match        *://*.vfleague.com/federation.php*
+// @match        *://*.vfliga.ru/federation.php*
+// @match        *://*.vfliga.com/federation.php*
 // @match        *://www.transfermarkt.us/*/startseite/verein/*
 // @match        *://www.transfermarkt.com/*/startseite/verein/*
 // @match        *://www.transfermarkt.co.uk/*/startseite/verein/*
@@ -1486,9 +1493,16 @@ const href = location.href;
   } else if (location.hostname.includes('transfermarkt.')) {
     initTransfermarkt();
   } else if (href.includes('/fed_news.php')) {
+    var _newsParams = new URLSearchParams(window.location.search);
+    var _newsNationId = _newsParams.get('nation_id');
+    if (_newsNationId) ensureNewsForm(_newsNationId);
     initPlayedNationalTeamMatches();
     initNationalTeamMatches();
     initInterseasonCupResults();
+    initLeagueTable();
+    initBBCodeToolbar();
+  } else if (href.includes('/federation.php')) {
+    initAddNewsLink();
   }
 
   // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
@@ -1651,6 +1665,228 @@ const href = location.href;
     GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
   }
 
+  // ========== BB-Code Toolbar (fed_news.php) ==========
+
+  function initBBCodeToolbar() {
+    var memo = document.getElementById('memo');
+    if (!memo) return;
+    if (document.getElementById('bbcode-toolbar')) return;
+
+    var toolbar = document.createElement('div');
+    toolbar.id = 'bbcode-toolbar';
+    toolbar.style.cssText = 'margin:4px 0; display:flex; flex-wrap:wrap; gap:2px;';
+
+    var tags = [
+      { label: 'B', open: '[b]', close: '[/b]', title: 'Жирный' },
+      { label: 'I', open: '[i]', close: '[/i]', title: 'Курсив' },
+      { label: 'U', open: '[u]', close: '[/u]', title: 'Подчёркнутый' },
+      { label: 'S', open: '[s]', close: '[/s]', title: 'Зачёркнутый' },
+      { label: 'sm', open: '[small]', close: '[/small]', title: 'Маленький шрифт' },
+      { label: 'tt', open: '[tt]', close: '[/tt]', title: 'Моноширинный' },
+      { label: 'sub', open: '[sub]', close: '[/sub]', title: 'Нижний индекс' },
+      { label: 'sup', open: '[sup]', close: '[/sup]', title: 'Верхний индекс' },
+      { label: '🎨', open: '[color=#]', close: '[/color]', title: 'Цвет' },
+      { label: '🔗', open: '[a href= target="_blank"]', close: '[/a]', title: 'Ссылка' },
+      { label: '—', open: '[hr]', close: '', title: 'Разделитель' },
+      { label: '▦', open: '[table width=70% align=center]\n[tr][td]', close: '[/td][/tr]\n[/table]', title: 'Таблица' },
+      { label: 'tr', open: '[tr]', close: '[/tr]', title: 'Строка таблицы' },
+      { label: 'td', open: '[td]', close: '[/td]', title: 'Ячейка таблицы' },
+      { label: 'list', open: '[list]\n', close: '\n[/list]', title: 'Список' },
+      { label: '[*]', open: '[*] ', close: '', title: 'Элемент списка' },
+    ];
+
+    for (var i = 0; i < tags.length; i++) {
+      (function(tag) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = tag.label;
+        btn.title = tag.title;
+        btn.style.cssText = 'padding:2px 6px; cursor:pointer; font-size:12px; min-width:28px; border:1px solid #999; background:#f0f0f0; border-radius:3px;';
+        btn.addEventListener('click', function() {
+          var start = memo.selectionStart;
+          var end = memo.selectionEnd;
+          var selected = memo.value.substring(start, end);
+          var before = memo.value.substring(0, start);
+          var after = memo.value.substring(end);
+          memo.value = before + tag.open + selected + tag.close + after;
+          memo.focus();
+          var cursorPos = start + tag.open.length + selected.length;
+          if (!selected && tag.close) cursorPos = start + tag.open.length;
+          memo.selectionStart = memo.selectionEnd = cursorPos;
+          memo.dispatchEvent(new Event('change'));
+          if (typeof preview === 'function') preview();
+        });
+        toolbar.appendChild(btn);
+      })(tags[i]);
+    }
+
+    // Insert toolbar right after memo (or its parent <p>)
+    var memoContainer = memo.parentNode;
+    if (memoContainer.tagName === 'P') {
+      memoContainer.parentNode.insertBefore(toolbar, memoContainer.nextSibling);
+    } else {
+      memo.parentNode.insertBefore(toolbar, memo.nextSibling);
+    }
+
+    // Move the script buttons container (p:has(a.butn)) right after the toolbar
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (btnContainer) {
+      // Remove "Федерация ..." link — it's redundant next to the toolbar
+      var fedLinks = btnContainer.querySelectorAll('a.butn[href*="federation.php"]');
+      for (var fl = 0; fl < fedLinks.length; fl++) fedLinks[fl].remove();
+      toolbar.parentNode.insertBefore(btnContainer, toolbar.nextSibling);
+    }
+  }
+
+  // ========== Ensure News Form (fed_news.php) ==========
+
+  function ensureNewsForm(nationId) {
+    // Check if the news form already exists and is inside the main content area
+    var mainContent = document.querySelector('.tmain div');
+    var forms = document.querySelectorAll('form[action="/fed_news.php"]');
+    var existingForm = null;
+    for (var i = 0; i < forms.length; i++) {
+      var actInput = forms[i].querySelector('input[name="act"][value="save"]');
+      if (actInput) { existingForm = forms[i]; break; }
+    }
+
+    if (existingForm && mainContent && mainContent.contains(existingForm)) {
+      // Form exists inside main content — all good
+      return;
+    }
+
+    if (existingForm && mainContent && !mainContent.contains(existingForm)) {
+      // Form and related content exist outside main content area — move everything inside
+      // Find all sibling elements around the form that belong together
+      // (h1 title, description paragraphs, preview table, form, buttons, script, bbcode help)
+      var outsideH1 = null;
+      var allH1s = document.querySelectorAll('h1');
+      for (var h = 0; h < allH1s.length; h++) {
+        if (!mainContent.contains(allH1s[h])) { outsideH1 = allH1s[h]; break; }
+      }
+
+      // Collect all elements to move: from outsideH1 (or form) to the end of its parent
+      var startNode = outsideH1 || existingForm;
+      var parent = startNode.parentNode;
+      var nodesToMove = [];
+      var node = startNode;
+      while (node) {
+        var next = node.nextSibling;
+        nodesToMove.push(node);
+        node = next;
+      }
+
+      // Insert all collected nodes at the end of mainContent
+      for (var n = 0; n < nodesToMove.length; n++) {
+        mainContent.appendChild(nodesToMove[n]);
+      }
+      return;
+    }
+
+    // Form not found — create it
+    var form = document.createElement('form');
+    form.action = '/fed_news.php';
+    form.method = 'POST';
+
+    var actHidden = document.createElement('input');
+    actHidden.type = 'hidden';
+    actHidden.name = 'act';
+    actHidden.value = 'save';
+    form.appendChild(actHidden);
+
+    var nationHidden = document.createElement('input');
+    nationHidden.type = 'hidden';
+    nationHidden.name = 'nation_id';
+    nationHidden.value = nationId;
+    form.appendChild(nationHidden);
+
+    var titleLabel = document.createElement('p');
+    titleLabel.className = 'lh18 txt';
+    titleLabel.style.marginBottom = '0';
+    titleLabel.textContent = 'Заголовок: ';
+    var titleInput = document.createElement('input');
+    titleInput.name = 'title';
+    titleInput.type = 'text';
+    titleInput.maxLength = 100;
+    titleInput.style.cssText = 'width:706px; margin:1px auto; padding:1px';
+    titleInput.className = 'form2';
+    titleLabel.appendChild(titleInput);
+    form.appendChild(titleLabel);
+
+    var memoP = document.createElement('p');
+    memoP.className = 'lh18 txt';
+    memoP.style.marginTop = '0';
+    var memo = document.createElement('textarea');
+    memo.id = 'memo';
+    memo.name = 'memo';
+    memo.className = 'form2';
+    memo.style.cssText = 'width:770px; margin:1px auto; padding:1px; height:300px';
+    memoP.appendChild(memo);
+    form.appendChild(memoP);
+
+    // Button container for script buttons (hidden anchor as marker for p:has(a.butn))
+    var btnContainer = document.createElement('p');
+    var markerLink = document.createElement('a');
+    markerLink.className = 'butn';
+    markerLink.href = 'javascript:void(0)';
+    markerLink.style.display = 'none';
+    btnContainer.appendChild(markerLink);
+    form.appendChild(btnContainer);
+
+    var submitBtn = document.createElement('p');
+    submitBtn.innerHTML = '<a href="javascript:void(0)" class="butn-green" onclick="this.closest(\'form\').submit(); return false;">Добавить новость</a>' +
+      ' <a href="https://www.virtualsoccer.ru/federation.php?num=' + nationId + '" class="butn">Назад</a>';
+    form.appendChild(submitBtn);
+
+    // Insert form in a sensible place on the page — inside main content area
+    if (mainContent) {
+      var errorH1 = mainContent.querySelector('h1');
+      var insertPoint = null;
+      if (errorH1) {
+        var sibling = errorH1.nextElementSibling;
+        while (sibling && sibling.tagName === 'P') {
+          insertPoint = sibling;
+          sibling = sibling.nextElementSibling;
+        }
+      }
+      if (insertPoint) {
+        insertPoint.parentNode.insertBefore(form, insertPoint.nextSibling);
+      } else if (errorH1) {
+        errorH1.parentNode.insertBefore(form, errorH1.nextSibling);
+      } else {
+        mainContent.appendChild(form);
+      }
+    } else {
+      document.body.appendChild(form);
+    }
+  }
+
+  // ========== Add News Link (federation.php) ==========
+
+  function initAddNewsLink() {
+    var urlParams = new URLSearchParams(window.location.search);
+    var num = urlParams.get('num');
+    if (!num) return;
+
+    var navPanels = document.querySelectorAll('div.lh16.txt');
+    var navPanel = null;
+    for (var i = 0; i < navPanels.length; i++) {
+      if (navPanels[i].textContent.indexOf('Новости') !== -1 &&
+          navPanels[i].textContent.indexOf('Команды') !== -1 &&
+          navPanels[i].textContent.indexOf('Сборные') !== -1) {
+        navPanel = navPanels[i];
+        break;
+      }
+    }
+    if (!navPanel) return;
+
+    var link = document.createElement('a');
+    link.href = 'fed_news.php?nation_id=' + num;
+    link.textContent = 'Добавить новость';
+    navPanel.appendChild(document.createTextNode(' | '));
+    navPanel.appendChild(link);
+  }
+
   // ========== Interseason Cup Results (fed_news.php) ==========
 
   function initInterseasonCupResults() {
@@ -1783,6 +2019,239 @@ const href = location.href;
           insertIntoMemo(bbcode);
           btn.textContent = 'Итоги Кубка Межсезонья';
         });
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
+  }
+
+  // ========== League Table (fed_news.php) ==========
+
+  function initLeagueTable() {
+    // --- Pure functions (copied from src/ modules) ---
+
+    function parseDivisionLinks(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var anchors = doc.querySelectorAll('a[href*="v2champ.php"]');
+      var results = [];
+
+      for (var i = 0; i < anchors.length; i++) {
+        var a = anchors[i];
+        var name = a.textContent.trim();
+        if (!name) continue;
+
+        var url = a.getAttribute('href') || '';
+        var match = url.match(/[?&]num=(\d+)/);
+        var divisionId = match ? match[1] : '';
+
+        results.push({ name: name, url: url, divisionId: divisionId });
+      }
+
+      return results;
+    }
+
+    function parseDivisionTable(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+
+      var tables = doc.querySelectorAll('table.tbl');
+      var targetTable = null;
+
+      for (var ti = 0; ti < tables.length; ti++) {
+        var headerRow = tables[ti].querySelector('tr[bgcolor="#006600"]');
+        if (!headerRow) continue;
+        var text = headerRow.textContent;
+        if (text.indexOf('Команда') !== -1 && text.indexOf('М') !== -1) {
+          targetTable = tables[ti];
+          break;
+        }
+      }
+
+      if (!targetTable) return null;
+
+      var rows = [];
+      var allRows = targetTable.querySelectorAll(':scope > tbody > tr, :scope > tr');
+
+      for (var ri = 0; ri < allRows.length; ri++) {
+        var row = allRows[ri];
+        if (row.getAttribute('bgcolor') === '#006600') continue;
+
+        var teamAnchor = row.querySelector('a[href*="roster.php"]');
+        if (!teamAnchor) continue;
+
+        var teamName = teamAnchor.textContent.trim();
+        var teamLink = teamAnchor.getAttribute('href') || '';
+
+        var posTable = row.querySelector('table.nil');
+        var position = '';
+        if (posTable) {
+          var b = posTable.querySelector('b');
+          if (b) position = b.textContent.trim();
+        }
+
+        var cells = row.querySelectorAll(':scope > td');
+
+        var teamCellIndex = -1;
+        for (var ci = 0; ci < cells.length; ci++) {
+          if (cells[ci].querySelector('a[href*="roster.php"]')) {
+            teamCellIndex = ci;
+            break;
+          }
+        }
+        if (teamCellIndex < 0) continue;
+
+        var games = cells[teamCellIndex + 1] ? cells[teamCellIndex + 1].textContent.trim() : '';
+        var wins = cells[teamCellIndex + 2] ? cells[teamCellIndex + 2].textContent.trim() : '';
+        var draws = cells[teamCellIndex + 3] ? cells[teamCellIndex + 3].textContent.trim() : '';
+        var losses = cells[teamCellIndex + 4] ? cells[teamCellIndex + 4].textContent.trim() : '';
+
+        var goalsCell = cells[teamCellIndex + 5];
+        var goalsFor = '';
+        var goalsAgainst = '';
+        if (goalsCell) {
+          var goalsTds = goalsCell.querySelectorAll('table td');
+          if (goalsTds.length >= 3) {
+            goalsFor = goalsTds[0].textContent.trim();
+            goalsAgainst = goalsTds[2].textContent.trim();
+          }
+        }
+
+        var goalDiff = cells[teamCellIndex + 6] ? cells[teamCellIndex + 6].textContent.trim() : '';
+        var points = cells[teamCellIndex + 7] ? cells[teamCellIndex + 7].textContent.trim() : '';
+        var vs = cells[teamCellIndex + 8] ? cells[teamCellIndex + 8].textContent.trim() : '';
+        var rm = cells[teamCellIndex + 10] ? cells[teamCellIndex + 10].textContent.trim() : '';
+
+        rows.push({
+          position: position,
+          teamName: teamName,
+          teamLink: teamLink,
+          games: games,
+          wins: wins,
+          draws: draws,
+          losses: losses,
+          goalsFor: goalsFor,
+          goalsAgainst: goalsAgainst,
+          goalDiff: goalDiff,
+          points: points,
+          vs: vs,
+          rm: rm
+        });
+      }
+
+      if (rows.length === 0) return null;
+
+      return { rows: rows };
+    }
+
+    function formatDivisionTableBBCode(data, divisionName) {
+      var lines = [];
+
+      var headers = ['М', 'Команда', 'И', 'В', 'Н', 'П', 'М', '+/-', 'О', 'Vs', 'РМ'];
+      var headerCells = headers.map(function(h) { return '[td]' + h + '[/td]'; }).join('');
+      lines.push('[tr]' + headerCells + '[/tr]');
+
+      for (var i = 0; i < data.rows.length; i++) {
+        var row = data.rows[i];
+        var teamCell = '[a href=' + row.teamLink + ' target="_blank"]' + row.teamName + '[/a]';
+        var goals = row.goalsFor + ' - ' + row.goalsAgainst;
+        var rowCells = [
+          row.position,
+          teamCell,
+          row.games,
+          row.wins,
+          row.draws,
+          row.losses,
+          goals,
+          row.goalDiff,
+          row.points,
+          row.vs,
+          row.rm
+        ].map(function(c) { return '[td]' + c + '[/td]'; }).join('');
+        lines.push('[tr]' + rowCells + '[/tr]');
+      }
+
+      return '[b]' + divisionName + '[/b]\n\n[table width=70% align=center]\n' + lines.join('\n') + '\n[/table]';
+    }
+
+    function insertIntoMemo(text) {
+      var memo = document.getElementById('memo');
+      if (!memo) return;
+      memo.value = memo.value ? memo.value + '\n\n' + text : text;
+      memo.dispatchEvent(new Event('change'));
+      if (typeof preview === 'function') preview();
+    }
+
+    // --- Entry point ---
+    var urlParams = new URLSearchParams(window.location.search);
+    var nationId = urlParams.get('nation_id');
+    if (!nationId) return;
+
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Таблица дивизиона';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+      var teamsUrl = SITE_CONFIG.BASE_URL + '/teams_cntr.php?num=' + nationId;
+      httpGet(teamsUrl, function(err, html) {
+        if (err || !html) {
+          alert('Ошибка загрузки списка дивизионов');
+          btn.textContent = 'Таблица дивизиона';
+          return;
+        }
+        var divisions = parseDivisionLinks(html);
+        if (!divisions.length) {
+          alert('Дивизионы не найдены');
+          btn.textContent = 'Таблица дивизиона';
+          return;
+        }
+        var existingSelect = btnContainer.querySelector('#division-selector');
+        if (existingSelect) existingSelect.remove();
+        var select = document.createElement('select');
+        select.id = 'division-selector';
+        select.style.marginLeft = '5px';
+        var defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = '— Выберите дивизион —';
+        select.appendChild(defaultOption);
+        for (var i = 0; i < divisions.length; i++) {
+          var opt = document.createElement('option');
+          opt.value = divisions[i].divisionId;
+          opt.textContent = divisions[i].name;
+          opt.setAttribute('data-url', divisions[i].url);
+          opt.setAttribute('data-name', divisions[i].name);
+          select.appendChild(opt);
+        }
+        select.onchange = function() {
+          var divisionId = select.value;
+          if (!divisionId) return;
+          var selectedOption = select.options[select.selectedIndex];
+          var divName = selectedOption.getAttribute('data-name') || '';
+          btn.textContent = 'Загрузка таблицы...';
+          var champUrl = SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divisionId;
+          httpGet(champUrl, function(err2, html2) {
+            if (err2 || !html2) {
+              alert('Ошибка загрузки таблицы дивизиона');
+              btn.textContent = 'Таблица дивизиона';
+              return;
+            }
+            var data = parseDivisionTable(html2);
+            if (!data) {
+              alert('Таблица не найдена');
+              btn.textContent = 'Таблица дивизиона';
+              return;
+            }
+            var bbcode = formatDivisionTableBBCode(data, divName);
+            insertIntoMemo(bbcode);
+            btn.textContent = 'Таблица дивизиона';
+          });
+        };
+        btn.parentNode.insertBefore(select, btn.nextSibling);
+        btn.textContent = 'Таблица дивизиона';
       });
     };
 
