@@ -79,9 +79,11 @@ describe('parseMatchEvents', () => {
     expect(result[1].playerName).toBe('Б');
   });
 
-  it('skips rows with missing minute', () => {
+  it('uses ? for rows with missing minute', () => {
     var noMinuteRow = '<tr bgcolor="#c9f2c5"><td></td><td title="Гол"></td><td></td><td><a class="mnu">Игрок</a></td><td>1:0</td></tr>';
-    expect(parseMatchEvents(wrapRows(noMinuteRow))).toEqual([]);
+    var result = parseMatchEvents(wrapRows(noMinuteRow));
+    expect(result).toHaveLength(1);
+    expect(result[0].minute).toBe('?');
   });
 
   it('skips rows with missing player name', () => {

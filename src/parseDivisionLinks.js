@@ -16,7 +16,8 @@ export function parseDivisionLinks(html) {
 
   for (const a of anchors) {
     const name = a.textContent.trim();
-    if (!name) continue;
+    // Skip empty names and purely numeric names (team position numbers in per-team rows)
+    if (!name || /^\d+$/.test(name)) continue;
 
     const url = a.getAttribute('href') || '';
     const match = url.match(/[?&]num=(\d+)/);

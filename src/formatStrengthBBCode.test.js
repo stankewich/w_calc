@@ -43,7 +43,7 @@ describe('formatStrengthBBCode', () => {
     expect(result).toMatch(/ff967e.*3375.*87e878.*4621/);
   });
 
-  it('stronger home gets green bg, weaker away gets red bg', () => {
+  it('home always red bg, away always green bg regardless of strength', () => {
     var homeStronger = {
       label: 'Сила в начале матча',
       homeValue: 5000, homePercent: 60,
@@ -51,8 +51,8 @@ describe('formatStrengthBBCode', () => {
       diff: -2000
     };
     var result = formatStrengthBBCode({ start: homeStronger, end: null });
-    // Home stronger → green (left), away weaker → red (right)
-    expect(result).toMatch(/87e878.*5000.*ff967e.*3000/);
+    // Home always red (ff967e), away always green (87e878)
+    expect(result).toMatch(/ff967e.*5000.*87e878.*3000/);
     expect(result).toContain('+2000');
   });
 

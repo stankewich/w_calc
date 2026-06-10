@@ -35,7 +35,12 @@ export function formatDivisionTableBBCode(data, divisionName) {
   // Data rows
   for (var i = 0; i < data.rows.length; i++) {
     var row = data.rows[i];
-    var teamCell = '[a href=' + row.teamLink + ' target="_blank"]' + row.teamName + '[/a]';
+    var teamLink = row.teamLink || '';
+    // Normalize to root-relative so the BB-code renderer doesn't mangle it
+    if (teamLink && !teamLink.startsWith('http') && !teamLink.startsWith('/')) {
+      teamLink = '/' + teamLink;
+    }
+    var teamCell = '[a href=' + teamLink + ' target="_blank"]' + row.teamName + '[/a]';
     var goals = row.goalsFor + ' - ' + row.goalsAgainst;
     var cells = [
       row.position,

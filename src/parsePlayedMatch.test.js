@@ -48,6 +48,23 @@ describe('parsePlayedMatch', () => {
     expect(result.country1).toBe('Канада');
   });
 
+  it('returns the LAST played match when multiple viewmatch links exist', () => {
+    const html = `<html><body>
+      <table><tr><td class="lh20 hdr2l"><a href="https://www.virtualsoccer.ru/nation.php?num=123747" class="mnu">Канада (нац.)</a></td></tr></table>
+      <td colspan="2" style="padding-top:15px">
+        <div class="lh14 txt2r">12 апреля - Г - <a href="https://www.virtualsoccer.ru/nation.php?num=123376">Никарагуа (нац.)</a> <a href="https://www.virtualsoccer.ru/viewmatch.php?day=25692&amp;match_id=218830" class="mnu"><b>1:0</b></a></div>
+        <div class="lh14 txt2r">сегодня - Д - <a href="https://www.virtualsoccer.ru/nation.php?num=123482">Гайана (нац.)</a> <a href="https://www.virtualsoccer.ru/viewmatch.php?day=25723&amp;match_id=218933" class="mnu"><b>0:1</b></a></div>
+        <div class="lh14 txt2r">26 апреля - Д - <a href="https://www.virtualsoccer.ru/nation.php?num=123253">Гватемала (нац.)</a> <a href="https://www.virtualsoccer.ru/previewmatch.php?day=25758&amp;match_id=219035" class="mnu"><b>?:?</b></a></div>
+      </td>
+    </body></html>`;
+    const result = parsePlayedMatch(html);
+    expect(result).not.toBeNull();
+    // Should pick the last played match (Гайана, 0:1), not the first (Никарагуа, 1:0)
+    expect(result.matchUrl).toContain('match_id=218933');
+    expect(result.score).toBe('0:1');
+    expect(result.country2).toBe('Гайана');
+  });
+
   it('works with real nation.php example HTML', () => {
     const html = `<html><body>
       <table><tr>

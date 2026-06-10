@@ -110,6 +110,15 @@ export function parseDivisionTable(html) {
     // cells[teamCellIndex + 9] is Vs change — skip it
     const rm = cells[teamCellIndex + 10]?.textContent.trim() || '';
 
+    // Movement: find go_up.gif / go_down.gif img anywhere in the row
+    let movement = 'neutral';
+    const moveImgs = row.querySelectorAll('img');
+    for (const img of moveImgs) {
+      const msrc = img.getAttribute('src') || '';
+      if (msrc.includes('go_up.gif')) { movement = 'up'; break; }
+      if (msrc.includes('go_down.gif')) { movement = 'down'; break; }
+    }
+
     rows.push({
       position,
       teamName,
@@ -124,6 +133,7 @@ export function parseDivisionTable(html) {
       points,
       vs,
       rm,
+      movement,
     });
   }
 

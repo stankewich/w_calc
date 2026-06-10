@@ -104,7 +104,7 @@ function parseEventRow(row) {
 
   // Minute from first td
   var minute = tds[0].textContent.trim();
-  if (!minute) return null;
+  if (!minute) minute = '?';
 
   // Player names from a.mnu links (also matches a.mnu.qf since it has class mnu)
   var playerLinks = row.querySelectorAll('a.mnu');

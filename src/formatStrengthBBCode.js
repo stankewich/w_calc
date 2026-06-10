@@ -29,7 +29,8 @@ export function formatStrengthBBCode(strength) {
 
 /**
  * Formats a single strength row into BB-code.
- * Home always left, away always right. Stronger side gets green bg, weaker gets red.
+ * Home always left (red), away always right (green) — fixed layout.
+ * +diff shown on the stronger side.
  *
  * @param {StrengthRow} row
  * @returns {string}
@@ -40,18 +41,15 @@ function formatStrengthRowBBCode(row) {
   var homeWidth = Math.max(row.homePercent - 10, 5);
   var awayWidth = Math.max(row.awayPercent - 10, 5);
 
-  var homeBg, homeFg, awayBg, awayFg, homeDiff, awayDiff;
-  if (row.homeValue >= row.awayValue) {
-    homeBg = '#87e878'; homeFg = '#060'; homeDiff = diffStr;
-    awayBg = '#ff967e'; awayFg = '#620'; awayDiff = '';
-  } else {
-    homeBg = '#ff967e'; homeFg = '#620'; homeDiff = '';
-    awayBg = '#87e878'; awayFg = '#060'; awayDiff = diffStr;
-  }
+  // Fixed: home=red, away=green; +diff on the stronger side
+  var homeBg = '#ff967e'; var homeFg = '#620';
+  var awayBg = '#87e878'; var awayFg = '#060';
+  var homeDiff = row.homeValue >= row.awayValue ? diffStr : '';
+  var awayDiff = row.awayValue > row.homeValue ? diffStr : '';
 
   return '[table width=100%][tr]' +
     '[td align=left]' + row.label + '[/td]' +
-    '[td bgcolor=' + homeBg + ' width=' + homeWidth + '% align=right][b][color=' + homeFg + ']' + row.homeValue + homeDiff + '[/color][/b][/td]' +
+    '[td bgcolor=' + homeBg + ' width=' + homeWidth + '% align=center][b][color=' + homeFg + ']' + row.homeValue + homeDiff + '[/color][/b][/td]' +
     '[td bgcolor=' + awayBg + ' width=' + awayWidth + '%][b][color=' + awayFg + ']' + row.awayValue + awayDiff + '[/color][/b][/td]' +
     '[/tr][/table]';
 }

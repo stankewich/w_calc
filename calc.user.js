@@ -2,7 +2,7 @@
 // @name         VSOL: weather and FWDs count
 // @license MIT
 // @namespace    http://tampermonkey.net/
-// @version      1.0352
+// @version      1.53
 // @description  Калькулятор статсы погоды, напов и определение школы команды
 // @author       community
 // @match        *://*.virtualsoccer.ru/roster.php*
@@ -34,10 +34,38 @@
 // @match        *://*.vfliga.ru/teams_cntr.php*
 // @match        *://*.vfliga.com/teams_cntr.php*
 // @match        *://*.virtualsoccer.ru/realplayers.php*
+// @match        *://*.virtualsoccer.ru/adm_baseplayers.php*
+// @match        *://*.vfleague.com/adm_baseplayers.php*
+// @match        *://*.vfliga.ru/adm_baseplayers.php*
+// @match        *://*.vfliga.com/adm_baseplayers.php*
 // @match        *://*.virtualsoccer.ru/fed_news.php*
 // @match        *://*.vfleague.com/fed_news.php*
 // @match        *://*.vfliga.ru/fed_news.php*
 // @match        *://*.vfliga.com/fed_news.php*
+// @match        *://*.virtualsoccer.ru/fed_news_edit.php*
+// @match        *://*.vfleague.com/fed_news_edit.php*
+// @match        *://*.vfliga.ru/fed_news_edit.php*
+// @match        *://*.vfliga.com/fed_news_edit.php*
+// @match        *://*.virtualsoccer.ru/v2champ.php*
+// @match        *://*.vfleague.com/v2champ.php*
+// @match        *://*.vfliga.ru/v2champ.php*
+// @match        *://*.vfliga.com/v2champ.php*
+// @match        *://*.virtualsoccer.ru/matchlist.php*
+// @match        *://*.vfleague.com/matchlist.php*
+// @match        *://*.vfliga.ru/matchlist.php*
+// @match        *://*.vfliga.com/matchlist.php*
+// @match        *://*.virtualsoccer.ru/manager_transflist.php*
+// @match        *://*.vfleague.com/manager_transflist.php*
+// @match        *://*.vfliga.ru/manager_transflist.php*
+// @match        *://*.vfliga.com/manager_transflist.php*
+// @match        *://*.virtualsoccer.ru/manager_deltransf.php*
+// @match        *://*.vfleague.com/manager_deltransf.php*
+// @match        *://*.vfliga.ru/manager_deltransf.php*
+// @match        *://*.vfliga.com/manager_deltransf.php*
+// @match        *://*.virtualsoccer.ru/mng_transf.php*
+// @match        *://*.vfleague.com/mng_transf.php*
+// @match        *://*.vfliga.ru/mng_transf.php*
+// @match        *://*.vfliga.com/mng_transf.php*
 // @match        *://*.virtualsoccer.ru/federation.php*
 // @match        *://*.vfleague.com/federation.php*
 // @match        *://*.vfliga.ru/federation.php*
@@ -92,16 +120,9 @@
   
   // Определение базового URL в зависимости от домена
   const SITE_CONFIG = (() => {
-    const hostname = window.location.hostname;
-    let baseUrl = 'https://www.virtualsoccer.ru'; // default
-    if (hostname.includes('vfleague.com')) {
-      baseUrl = 'https://www.vfleague.com';
-    } else if (hostname.includes('vfliga.com')) {
-      baseUrl = 'https://www.vfliga.com';
-    } else if (hostname.includes('vfliga.ru')) {
-      baseUrl = 'https://www.vfliga.ru';
-    }
-    return { BASE_URL: baseUrl };
+    // Use the exact origin of the current page to avoid cross-origin CORS issues
+    // (e.g. vfliga.ru vs www.vfliga.ru)
+    return { BASE_URL: window.location.origin };
   })();
   
     const WEATHER_LABELS = [
@@ -472,7 +493,8 @@
       'Швейцария':165,'Швеция':166,'Шотландия':167,'Шри Ланка':168,'Шри-Ланка':168,
       'Эквадор':169,'Экваториальная Гвинея':203,'Эритрея':170,'Эсватини':197,
       'Эстония':171,'Эфиопия':172,'ЮАР':173,'Южная Корея':175,
-      'Южный Судан':217,'Ямайка':176,'Япония':177,'Бонэйр':195
+      'Южный Судан':217,'Ямайка':176,'Япония':177,'Бонэйр':195,
+      'Амер. Виргины':218,'Экв. Гвинея':203
     };
     var FED_GEN = {
       'России':124,'Украины':154,'Беларуси':16,'Польши':121,'Германии':40,
@@ -504,7 +526,7 @@
       'Уганды':152,'Танзании':146,'Мозамбика':103,'Эфиопии':172,'Анголы':7,
       'Габона':32,'Гвинеи':38,'Ливии':88,'Мадагаскара':93,
       'Новой Зеландии':113,'Израиля':57,'Уэльса':156,'Северной Ирландии':131,
-      'Пакистана':117,'Эритреи':170,'Реюньона':208
+      'Пакистана':117,'Эритреи':170,'Реюньона':208,'Гвинеи-Бисау':39,'Амер. Виргин':218,'Экв. Гвинеи':203, 'Амер. Виргин':218
     };
     function makeFlagImg(fedId, country) {
       var img = document.createElement('img');
@@ -733,11 +755,22 @@ function render() {
 
   // Функция для извлечения спецвозможностей из plrdat
   function extractAbilities(html) {
-    const plrdatMatch = html.match(/var plrdat\s*=\s*\[(.*?)\];/s);
-    if (!plrdatMatch) return null;
+    // Find plrdat using bracket matching (regex fails on large arrays with ]; inside strings)
+    const startMatch = html.match(/var plrdat\s*=\s*\[/);
+    if (!startMatch) return null;
+    
+    const startIdx = startMatch.index + startMatch[0].length;
+    let depth = 1;
+    let endIdx = startIdx;
+    for (let i = startIdx; i < html.length && depth > 0; i++) {
+      if (html[i] === '[') depth++;
+      else if (html[i] === ']') depth--;
+      if (depth === 0) endIdx = i;
+    }
+    if (endIdx <= startIdx) return null;
     
     try {
-      const plrdatText = plrdatMatch[1];
+      const plrdatText = html.substring(startIdx, endIdx);
       const abilities = {
         д: 0, пк: 0, км: 0,
         г: 0, ск: 0, пд: 0
@@ -756,7 +789,7 @@ function render() {
       }
       
       return abilities;
-    } catch {
+    } catch (e) {
       return null;
     }
   }
@@ -1490,24 +1523,78 @@ const href = location.href;
     enhanceFederationTeamsPage();
   } else if (href.includes('/realplayers.php')) {
     initPlayerParser();
+  } else if (href.includes('/adm_baseplayers.php') && new URLSearchParams(window.location.search).get('nid')) {
+    initPlayerParser();
+    initBasePlayersCheck();
   } else if (location.hostname.includes('transfermarkt.')) {
     initTransfermarkt();
   } else if (href.includes('/fed_news.php')) {
     var _newsParams = new URLSearchParams(window.location.search);
     var _newsNationId = _newsParams.get('nation_id');
     if (_newsNationId) ensureNewsForm(_newsNationId);
+    initFedNewsCalculatorTab(_newsNationId);
     initPlayedNationalTeamMatches();
     initNationalTeamMatches();
     initInterseasonCupResults();
     initLeagueTable();
+    initContinentalCups(_newsNationId);
+    initPlayedContinentalCupMatches(_newsNationId);
+    initDivisionMatchComments(_newsNationId);
+    initBBCodeToolbar();
+  } else if (href.includes('/fed_news_edit.php')) {
     initBBCodeToolbar();
   } else if (href.includes('/federation.php')) {
     initAddNewsLink();
+  } else if (href.includes('/manager_transflist.php') || href.includes('/manager_deltransf.php') || href.includes('/mng_transf.php')) {
+    initTransferWatch();
+  } else if (href.includes('/v2champ.php') || href.includes('/matchlist.php')) {
+    initMatchCopyButtons();
   }
 
   // ========== Player Parser & Matcher (realplayers.php + transfermarkt) ==========
 
   function initPlayerParser() {
+    // Remove position columns (И, GK..RF, V) ONLY on adm_baseplayers.php
+    if (href.includes('/adm_baseplayers.php')) {
+      removePositionColumns();
+    }
+
+    function removePositionColumns() {
+      // Columns to hide: И(12), GK(13)..RF(22), V обновление(23) — visual column indices
+      var COLS_TO_HIDE = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23];
+
+      var headerRows = document.querySelectorAll('tr[bgcolor="#006600"]');
+      if (!headerRows.length) return;
+      var targetTable = headerRows[0].closest('table');
+      if (!targetTable) return;
+
+      var allRows = targetTable.querySelectorAll('tr');
+      for (var ri = 0; ri < allRows.length; ri++) {
+        var cells = allRows[ri].querySelectorAll(':scope > td');
+        // Build visual-to-cell mapping (accounting for colspan)
+        var visCol = 0;
+        var cellVisStart = []; // cellVisStart[cellIdx] = first visual column of that cell
+        for (var ci = 0; ci < cells.length; ci++) {
+          cellVisStart[ci] = visCol;
+          var cs = parseInt(cells[ci].getAttribute('colspan') || '1', 10);
+          visCol += cs;
+        }
+        // Hide cells whose visual range overlaps with COLS_TO_HIDE
+        for (var ci2 = 0; ci2 < cells.length; ci2++) {
+          var cs2 = parseInt(cells[ci2].getAttribute('colspan') || '1', 10);
+          var cellStart = cellVisStart[ci2];
+          var cellEnd = cellStart + cs2 - 1;
+          // Check if any of this cell's visual columns are in the hide list
+          for (var vi = 0; vi < COLS_TO_HIDE.length; vi++) {
+            if (COLS_TO_HIDE[vi] >= cellStart && COLS_TO_HIDE[vi] <= cellEnd) {
+              cells[ci2].style.display = 'none';
+              break;
+            }
+          }
+        }
+      }
+    }
+
     function parseVSPlayers() {
       const players = [];
       const rows = document.querySelectorAll('#sortable tbody tr[id^="tr_"]');
@@ -1554,15 +1641,36 @@ const href = location.href;
       const tmData = GM_getValue('tmSavedPlayers', null);
       if (!tmData) { alert('Нет данных Transfermarkt! Сначала сохраните игроков на странице TM.'); return; }
       const tmPlayers = JSON.parse(tmData);
+
+      // Build TM lookup by ID
+      const tmById = {};
+      tmPlayers.forEach(p => { if (p.tmId) tmById[p.tmId] = p; });
       const tmNames = tmPlayers.map(p => normalizeString(p.fullName));
-      let notInTM = 0, similarMatches = 0;
+
+      let notInTM = 0, similarMatches = 0, idMatches = 0;
+
+      // Build set of VS player TM IDs for later "missing from VS" check
+      const vsIds = new Set();
 
       vsPlayers.forEach(vp => {
-        if (!vp.original?.trim()) return;
-        const vsName = normalizeString(vp.original);
         const origInput = vp.row.querySelector('input[name="orig_name[]"]');
         if (!origInput) return;
         origInput.style.fontWeight = ''; origInput.style.color = ''; origInput.title = '';
+
+        // Try ID-based match first
+        const vsTmId = (vp.link.match(/\/spieler\/(\d+)/) || [])[1];
+        if (vsTmId) {
+          vsIds.add(vsTmId);
+          if (tmById[vsTmId]) {
+            // Exact match by TM ID — player is confirmed present
+            idMatches++;
+            return;
+          }
+        }
+
+        // Fall back to name matching
+        if (!vp.original?.trim()) return;
+        const vsName = normalizeString(vp.original);
         if (tmNames.some(t => t === vsName)) return;
         const sim = findBestMatch(vsName, tmNames, 0.75);
         if (sim) {
@@ -1576,15 +1684,19 @@ const href = location.href;
         }
       });
 
+      // Find TM players missing from VS (not matched by ID or name)
       const vsOriginals = vsPlayers.map(p => normalizeString(p.original)).filter(o => o);
       const missing = tmPlayers.filter(tp => {
+        // Skip if matched by ID
+        if (tp.tmId && vsIds.has(tp.tmId)) return false;
+        // Skip if matched by name
         const n = normalizeString(tp.fullName);
         if (vsOriginals.some(v => v === n)) return false;
         return !findBestMatch(n, vsOriginals, 0.85);
       });
 
       const filled = fillEmptyRows(missing);
-      alert(`Сравнение:\n🔴 Нет в TM: ${notInTM}\n🟡 Похожие: ${similarMatches}\n🟢 Добавлено из TM: ${filled}\nВсего TM: ${tmPlayers.length}`);
+      alert(`Сравнение:\n🔵 Совпадение по ID: ${idMatches}\n🔴 Нет в TM: ${notInTM}\n🟡 Похожие: ${similarMatches}\n🟢 Добавлено из TM: ${filled}\nВсего TM: ${tmPlayers.length}`);
     }
 
     function fillEmptyRows(missingPlayers) {
@@ -1612,22 +1724,265 @@ const href = location.href;
     }
 
     // UI
-    const btnTable = document.querySelector('table.nil[align="center"]');
-    if (btnTable) {
-      const tr = btnTable.querySelector('tbody tr');
-      if (tr) {
-        const td = document.createElement('td');
-        td.className = 'txt';
-        const btn = document.createElement('a');
-        btn.className = 'butn-orange'; btn.href = 'javascript:void(0)';
-        btn.textContent = '🔍 Сравнить с ТМ';
-        btn.onclick = e => { e.preventDefault(); compareAndHighlight(); };
-        td.appendChild(btn);
-        const last = tr.querySelector('td:last-child');
-        tr.insertBefore(td, last);
+    // Only show Compare button on realplayers.php (not adm_baseplayers.php)
+    if (href.includes('/realplayers.php')) {
+      const btnTable = document.querySelector('table.nil[align="center"]');
+      if (btnTable) {
+        const tr = btnTable.querySelector('tbody tr');
+        if (tr) {
+          const td = document.createElement('td');
+          td.className = 'txt';
+          const btn = document.createElement('a');
+          btn.className = 'butn-orange'; btn.href = 'javascript:void(0)';
+          btn.textContent = '🔍 Сравнить с ТМ';
+          btn.onclick = e => { e.preventDefault(); compareAndHighlight(); };
+          td.appendChild(btn);
+          const last = tr.querySelector('td:last-child');
+          tr.insertBefore(td, last);
+        }
       }
+      GM_registerMenuCommand('Сравнить с ТМ', compareAndHighlight);
     }
-    GM_registerMenuCommand('Сравнить с ТМ', compareAndHighlight);
+  }
+
+  // ========== Base Players Check (adm_baseplayers.php) ==========
+
+  function initBasePlayersCheck() {
+    // Find the main table with team rows
+    var headerRows = document.querySelectorAll('tr[bgcolor="#006600"]');
+    if (!headerRows.length) return;
+    var targetTable = headerRows[0].closest('table');
+    if (!targetTable) return;
+
+    // Add header columns for results
+    for (var hi = 0; hi < headerRows.length; hi++) {
+      var hTds = headerRows[hi].querySelectorAll('td');
+      var lastTd = hTds[hTds.length - 1];
+
+      var thNew = document.createElement('td');
+      thNew.id = 'vsol-bp-col-new-header-' + hi;
+      thNew.className = 'lh18 txtw';
+      thNew.innerHTML = '<b>+ТМ</b>';
+      thNew.title = 'Новые игроки на TM (нет в базе)';
+      lastTd.parentNode.insertBefore(thNew, lastTd.nextSibling);
+
+      var thGone = document.createElement('td');
+      thGone.id = 'vsol-bp-col-gone-header-' + hi;
+      thGone.className = 'lh18 txtw';
+      thGone.innerHTML = '<b>-ТМ</b>';
+      thGone.title = 'Ушедшие с TM (есть в базе, нет на TM)';
+      thNew.parentNode.insertBefore(thGone, thNew.nextSibling);
+    }
+
+    // Add empty cells to all data rows + collect team info
+    var allRows = targetTable.querySelectorAll('tr');
+    var teams = [];
+    for (var ri = 0; ri < allRows.length; ri++) {
+      var row = allRows[ri];
+      if (row.getAttribute('bgcolor') === '#006600') continue;
+      var tds = row.querySelectorAll(':scope > td');
+      if (tds.length < 10) continue;
+
+      // Extract team num from realplayers.php link
+      var rpLink = row.querySelector('a[href*="realplayers.php"]');
+      if (!rpLink) continue;
+      var numMatch = rpLink.getAttribute('href').match(/num=(\d+)/);
+      if (!numMatch) continue;
+      var teamNum = numMatch[1];
+
+      // Extract TM URL from button onclick in the T column (td[9] visual)
+      var tmBtn = row.querySelector('button.btn-tm');
+      var tmUrl = '';
+      if (tmBtn) {
+        var onclick = tmBtn.getAttribute('onclick') || '';
+        var urlMatch = onclick.match(/window\.open\('([^']+)'/);
+        if (urlMatch) tmUrl = urlMatch[1];
+      }
+
+      // Add result cells
+      var lastTd2 = tds[tds.length - 1];
+
+      var tdNew = document.createElement('td');
+      tdNew.id = 'vsol-bp-new-' + teamNum;
+      tdNew.className = 'lh16 txt';
+      tdNew.textContent = '-';
+      tdNew.style.cssText = 'text-align:center;';
+      lastTd2.parentNode.insertBefore(tdNew, lastTd2.nextSibling);
+
+      var tdGone = document.createElement('td');
+      tdGone.id = 'vsol-bp-gone-' + teamNum;
+      tdGone.className = 'lh16 txt';
+      tdGone.textContent = '-';
+      tdGone.style.cssText = 'text-align:center;';
+      tdNew.parentNode.insertBefore(tdGone, tdNew.nextSibling);
+
+      teams.push({ teamNum: teamNum, tmUrl: tmUrl, tdNew: tdNew, tdGone: tdGone });
+    }
+
+    // Add "Check All" button
+    var btnDiv = document.createElement('div');
+    btnDiv.id = 'vsol-bp-check-div';
+    btnDiv.style.cssText = 'margin:6px 0; padding:4px;';
+
+    var checkBtn = document.createElement('a');
+    checkBtn.id = 'vsol-bp-check-btn';
+    checkBtn.href = 'javascript:void(0)';
+    checkBtn.className = 'butn';
+    checkBtn.textContent = 'Проверить все команды (TM)';
+    checkBtn.onclick = function() { runCheck(); };
+    btnDiv.appendChild(checkBtn);
+
+    var refreshBtn = document.createElement('a');
+    refreshBtn.id = 'vsol-bp-refresh-btn';
+    refreshBtn.href = 'javascript:void(0)';
+    refreshBtn.className = 'butn';
+    refreshBtn.textContent = '🔄 Сбросить кэш';
+    refreshBtn.style.marginLeft = '8px';
+    refreshBtn.onclick = function() {
+      teams.forEach(function(t) { try { localStorage.removeItem('vsol_bp_' + t.teamNum); } catch(e) {} });
+      teams.forEach(function(t) { t.tdNew.textContent = '-'; t.tdNew.style.backgroundColor = ''; t.tdGone.textContent = '-'; t.tdGone.style.backgroundColor = ''; });
+      alert('Кэш сброшен. Нажмите «Проверить все команды» для обновления.');
+    };
+    btnDiv.appendChild(refreshBtn);
+    targetTable.parentNode.insertBefore(btnDiv, targetTable);
+
+    var BP_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+    function getBpCache(teamNum) {
+      try {
+        var raw = localStorage.getItem('vsol_bp_' + teamNum);
+        if (!raw) return null;
+        var entry = JSON.parse(raw);
+        if (Date.now() - entry.time > BP_CACHE_TTL) return null;
+        return entry;
+      } catch (e) { return null; }
+    }
+
+    function setBpCache(teamNum, newCount, goneCount) {
+      try {
+        localStorage.setItem('vsol_bp_' + teamNum, JSON.stringify({ newCount: newCount, goneCount: goneCount, time: Date.now() }));
+      } catch (e) {}
+    }
+
+    function runCheck() {
+      var teamsWithTM = teams.filter(function(t) { return t.tmUrl; });
+      if (!teamsWithTM.length) { alert('Нет команд с TM-ссылками'); return; }
+
+      checkBtn.textContent = 'Проверка 0/' + teamsWithTM.length + '...';
+      var idx = 0;
+
+      function checkNext() {
+        if (idx >= teamsWithTM.length) {
+          checkBtn.textContent = 'Проверить все команды (TM)';
+          return;
+        }
+
+        var team = teamsWithTM[idx];
+        idx++;
+        checkBtn.textContent = 'Проверка ' + idx + '/' + teamsWithTM.length + '...';
+
+        // Check cache first
+        var cached = getBpCache(team.teamNum);
+        if (cached) {
+          team.tdNew.textContent = String(cached.newCount);
+          team.tdNew.style.backgroundColor = cached.newCount > 0 ? '#FFCCCC' : '#CCFFCC';
+          team.tdGone.textContent = String(cached.goneCount);
+          team.tdGone.style.backgroundColor = cached.goneCount > 0 ? '#FFCCCC' : '#CCFFCC';
+          checkNext(); // no delay for cached
+          return;
+        }
+
+        // Step 1: fetch realplayers.php to get current base player TM IDs
+        // Use GM_xmlhttpRequest to ensure full page access with proper session
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: SITE_CONFIG.BASE_URL + '/realplayers.php?num=' + team.teamNum + '&sss=6',
+          onload: function(response) {
+            var htmlR = response.responseText;
+            if (!htmlR || response.status !== 200) {
+              team.tdNew.textContent = '⚠';
+              team.tdGone.textContent = '⚠';
+              setTimeout(checkNext, 1000);
+              return;
+            }
+
+            // Parse spieler IDs from plrdata — filter by level=1 (основной состав)
+            // Structure: ..., "tmLink", "origName", level, ...
+            // Pattern: /spieler/{id}", "...", 1,  (level=1 after origName)
+            var baseIds = new Set();
+            var levelRegex = /\/spieler\/(\d+)",\s*"[^"]*",\s*(\d+)/g;
+            var lm;
+            while ((lm = levelRegex.exec(htmlR)) !== null) {
+              var spielerId = lm[1];
+              var level = parseInt(lm[2], 10);
+              if (level === 1) baseIds.add(spielerId);
+            }
+
+            // Fallback: if no level-filtered results, get ALL spieler IDs
+            if (baseIds.size === 0) {
+              var allSpieler = htmlR.match(/\/spieler\/(\d+)/g) || [];
+              var seenBase = {};
+              for (var asi = 0; asi < allSpieler.length; asi++) {
+                var asid = allSpieler[asi].replace('/spieler/', '');
+                if (!seenBase[asid]) { seenBase[asid] = true; baseIds.add(asid); }
+              }
+            }
+            console.log('[BaseCheck] team=' + team.teamNum + ' baseIds=' + baseIds.size + ' htmlLen=' + htmlR.length);
+
+            // Step 2: fetch TM page to get current squad TM IDs
+            var tmKaderUrl = team.tmUrl.replace('/startseite/', '/kader/');
+
+            setTimeout(function() {
+              GM_xmlhttpRequest({
+                method: 'GET',
+                url: tmKaderUrl,
+                onload: function(tmResponse) {
+                  if (tmResponse.status !== 200) {
+                    team.tdNew.textContent = '⚠';
+                    team.tdGone.textContent = '⚠';
+                    setTimeout(checkNext, 1000);
+                    return;
+                  }
+
+                  var tmIds = new Set();
+                  var tmMatches = tmResponse.responseText.match(/\/profil\/spieler\/(\d+)/g) || [];
+                  var seenTm = {};
+                  for (var ti = 0; ti < tmMatches.length; ti++) {
+                    var tmId = tmMatches[ti].replace('/profil/spieler/', '');
+                    if (!seenTm[tmId]) { seenTm[tmId] = true; tmIds.add(tmId); }
+                  }
+
+                  var newCount = 0, goneCount = 0;
+                  tmIds.forEach(function(id) { if (!baseIds.has(id)) newCount++; });
+                  baseIds.forEach(function(id) { if (!tmIds.has(id)) goneCount++; });
+                  console.log('[BaseCheck] team=' + team.teamNum + ' tmIds=' + tmIds.size + ' new=' + newCount + ' gone=' + goneCount);
+
+                  setBpCache(team.teamNum, newCount, goneCount);
+                  team.tdNew.textContent = String(newCount);
+                  team.tdNew.style.backgroundColor = newCount > 0 ? '#FFCCCC' : '#CCFFCC';
+                  team.tdGone.textContent = String(goneCount);
+                  team.tdGone.style.backgroundColor = goneCount > 0 ? '#FFCCCC' : '#CCFFCC';
+
+                  setTimeout(checkNext, 1000);
+                },
+                onerror: function() {
+                  team.tdNew.textContent = '⚠';
+                  team.tdGone.textContent = '⚠';
+                  setTimeout(checkNext, 1000);
+                }
+              });
+            }, 1000);
+          },
+          onerror: function() {
+            team.tdNew.textContent = '⚠';
+            team.tdGone.textContent = '⚠';
+            setTimeout(checkNext, 1000);
+          }
+        });
+      }
+
+      checkNext();
+    }
   }
 
   function initTransfermarkt() {
@@ -1637,9 +1992,13 @@ const href = location.href;
         const link = row.querySelector('td.posrela table.inline-table td.hauptlink a');
         if (!link) return;
         const name = link.textContent.trim();
-        if (seen.has(name)) return;
-        seen.add(name);
-        players.push({ fullName: name, profileUrl: link.getAttribute('href') });
+        const profileUrl = link.getAttribute('href') || '';
+        // Extract spieler ID from URL: .../profil/spieler/{id} or .../spieler/{id}
+        const tmIdMatch = profileUrl.match(/\/spieler\/(\d+)/);
+        const tmId = tmIdMatch ? tmIdMatch[1] : '';
+        if (!tmId || seen.has(tmId)) return;
+        seen.add(tmId);
+        players.push({ fullName: name, profileUrl: profileUrl, tmId: tmId });
       });
       return players;
     }
@@ -1663,6 +2022,1747 @@ const href = location.href;
       table.parentNode.insertBefore(div, table);
     }
     GM_registerMenuCommand('Сохранить игроков TM', () => { const p = parseTMPlayers(); GM_setValue('tmSavedPlayers', JSON.stringify(p)); GM_setValue('tmSavedDate', new Date().toISOString()); alert(`Сохранено ${p.length}`); });
+  }
+
+  // ========== Fed News Calculator Tab (fed_news.php) ==========
+
+  function initFedNewsCalculatorTab(nationId) {
+    if (!nationId) return;
+
+    // Find News_Form
+    var forms = document.querySelectorAll('form[action="/fed_news.php"]');
+    var newsForm = null;
+    for (var i = 0; i < forms.length; i++) {
+      if (forms[i].querySelector('input[name="act"][value="save"]')) {
+        newsForm = forms[i];
+        break;
+      }
+    }
+    if (!newsForm) return;
+
+    // Create tab bar
+    var tabBar = document.createElement('div');
+    tabBar.id = 'vsol-tab-bar';
+    tabBar.style.cssText = 'display:flex; margin-bottom:4px;';
+
+    var tabNews = document.createElement('div');
+    tabNews.id = 'vsol-tab-news';
+    tabNews.textContent = 'Новость';
+    tabNews.style.cssText = 'padding:4px 12px; cursor:pointer; border:1px solid #ccc; background:#f0f0f0;';
+
+    var tabCalc = document.createElement('div');
+    tabCalc.id = 'vsol-tab-calc';
+    tabCalc.textContent = 'Калькулятор';
+    tabCalc.style.cssText = 'padding:4px 12px; cursor:pointer; border:1px solid #ccc; background:#f0f0f0;';
+
+    tabBar.appendChild(tabNews);
+    tabBar.appendChild(tabCalc);
+
+    // Insert tab bar immediately before News_Form
+    newsForm.parentNode.insertBefore(tabBar, newsForm);
+
+    // Create calculator panel (hidden) and insert after News_Form
+    var calcPanel = document.createElement('div');
+    calcPanel.id = 'vsol-calc-panel';
+    calcPanel.style.display = 'none';
+
+    newsForm.parentNode.insertBefore(calcPanel, newsForm.nextSibling);
+
+    // Tab switching logic
+    function activateTab(tabName) {
+      if (tabName === 'news') {
+        newsForm.style.display = '';
+        calcPanel.style.display = 'none';
+        tabNews.style.fontWeight = 'bold';
+        tabNews.style.background = '#fff';
+        tabNews.style.borderBottom = '1px solid #fff';
+        tabCalc.style.fontWeight = 'normal';
+        tabCalc.style.background = '#f0f0f0';
+        tabCalc.style.borderBottom = '1px solid #ccc';
+      } else if (tabName === 'calc') {
+        newsForm.style.display = 'none';
+        calcPanel.style.display = '';
+        tabCalc.style.fontWeight = 'bold';
+        tabCalc.style.background = '#fff';
+        tabCalc.style.borderBottom = '1px solid #fff';
+        tabNews.style.fontWeight = 'normal';
+        tabNews.style.background = '#f0f0f0';
+        tabNews.style.borderBottom = '1px solid #ccc';
+      }
+    }
+
+    // ---- 8.1: idempotency flag ----
+    var _calcLoaded = false;
+
+    tabNews.addEventListener('click', function() { activateTab('news'); });
+    tabCalc.addEventListener('click', function() {
+      activateTab('calc');
+      if (!_calcLoaded) { _calcLoaded = true; loadCalculatorData(nationId); }
+    });
+
+    // Activate «Новость» tab by default
+    activateTab('news');
+
+    // ---- Inlined parse helpers (copied from src/, no export) ----
+
+    function parseDivisionLinks(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var anchors = doc.querySelectorAll('a[href*="v2champ.php"]');
+      var results = [];
+      var seen = {};
+      for (var i = 0; i < anchors.length; i++) {
+        var a = anchors[i];
+        var name = a.textContent.trim();
+        // Skip empty names and purely numeric names (team position numbers in per-team rows)
+        if (!name || /^\d+$/.test(name)) continue;
+        var url = a.getAttribute('href') || '';
+        var m = url.match(/[?&]num=(\d+)/);
+        var divisionId = m ? m[1] : '';
+        if (!divisionId || seen[divisionId]) continue;
+        seen[divisionId] = true;
+        results.push({ name: name, url: url, divisionId: divisionId });
+      }
+      return results;
+    }
+
+    function parseTourInfo(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var anchors = doc.querySelectorAll('a[href*="tblshow=1&tour="]');
+      var tours = [];
+      var seen = {};
+      var currentTour = 1;
+      var foundRed = false;
+      for (var i = 0; i < anchors.length; i++) {
+        var a = anchors[i];
+        var href = a.getAttribute('href') || '';
+        var m = href.match(/[?&]tour=(\d+)/);
+        if (!m) continue;
+        var tourNum = parseInt(m[1], 10);
+        if (seen[tourNum]) continue;
+        seen[tourNum] = true;
+        var font = a.querySelector('font[color="red"]');
+        var isCurrent = font !== null;
+        tours.push({ tourNum: tourNum, url: href, isCurrent: isCurrent });
+        if (isCurrent && !foundRed) {
+          currentTour = tourNum;
+          foundRed = true;
+        }
+      }
+      tours.sort(function(a, b) { return a.tourNum - b.tourNum; });
+      if (!foundRed && tours.length > 0) currentTour = tours[tours.length - 1].tourNum;
+      return { tours: tours, currentTour: currentTour };
+    }
+
+    function parseDivisionTable(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var tables = doc.querySelectorAll('table.tbl');
+      var targetTable = null;
+      for (var t = 0; t < tables.length; t++) {
+        var headerRow = tables[t].querySelector('tr[bgcolor="#006600"]');
+        if (!headerRow) continue;
+        var text = headerRow.textContent;
+        if (text.includes('Команда') && text.includes('М')) {
+          targetTable = tables[t];
+          break;
+        }
+      }
+      if (!targetTable) return null;
+      var rows = [];
+      var allRows = targetTable.querySelectorAll(':scope > tbody > tr, :scope > tr');
+      for (var r = 0; r < allRows.length; r++) {
+        var row = allRows[r];
+        if (row.getAttribute('bgcolor') === '#006600') continue;
+        var teamAnchor = row.querySelector('a[href*="roster.php"]');
+        if (!teamAnchor) continue;
+        var teamName = teamAnchor.textContent.trim();
+        var teamLink = teamAnchor.getAttribute('href') || '';
+        var posTable = row.querySelector('table.nil');
+        var position = '';
+        if (posTable) {
+          var b = posTable.querySelector('b');
+          if (b) position = b.textContent.trim();
+        }
+        var cells = row.querySelectorAll(':scope > td');
+        var teamCellIndex = -1;
+        for (var c = 0; c < cells.length; c++) {
+          if (cells[c].querySelector('a[href*="roster.php"]')) { teamCellIndex = c; break; }
+        }
+        if (teamCellIndex < 0) continue;
+        var games = cells[teamCellIndex + 1] ? cells[teamCellIndex + 1].textContent.trim() : '';
+        var wins = cells[teamCellIndex + 2] ? cells[teamCellIndex + 2].textContent.trim() : '';
+        var draws = cells[teamCellIndex + 3] ? cells[teamCellIndex + 3].textContent.trim() : '';
+        var losses = cells[teamCellIndex + 4] ? cells[teamCellIndex + 4].textContent.trim() : '';
+        var goalsCell = cells[teamCellIndex + 5];
+        var goalsFor = '', goalsAgainst = '';
+        if (goalsCell) {
+          var goalsTds = goalsCell.querySelectorAll('table td');
+          if (goalsTds.length >= 3) {
+            goalsFor = goalsTds[0].textContent.trim();
+            goalsAgainst = goalsTds[2].textContent.trim();
+          }
+        }
+        var goalDiff = cells[teamCellIndex + 6] ? cells[teamCellIndex + 6].textContent.trim() : '';
+        var points = cells[teamCellIndex + 7] ? cells[teamCellIndex + 7].textContent.trim() : '';
+        var vs = cells[teamCellIndex + 8] ? cells[teamCellIndex + 8].textContent.trim() : '';
+        var rm = cells[teamCellIndex + 10] ? cells[teamCellIndex + 10].textContent.trim() : '';
+        // Movement: find go_up.gif / go_down.gif img anywhere in the row
+        var movement = 'neutral';
+        var moveImgs = row.querySelectorAll('img');
+        for (var mi = 0; mi < moveImgs.length; mi++) {
+          var msrc = moveImgs[mi].getAttribute('src') || '';
+          if (msrc.indexOf('go_up.gif') !== -1) { movement = 'up'; break; }
+          if (msrc.indexOf('go_down.gif') !== -1) { movement = 'down'; break; }
+        }
+        rows.push({ position: position, teamName: teamName, teamLink: teamLink,
+          games: games, wins: wins, draws: draws, losses: losses,
+          goalsFor: goalsFor, goalsAgainst: goalsAgainst, goalDiff: goalDiff,
+          points: points, vs: vs, rm: rm, movement: movement });
+      }
+      if (rows.length === 0) return null;
+      return { rows: rows };
+    }
+
+    function parseMatchList(html) {
+      var doc = new DOMParser().parseFromString(html, 'text/html');
+      var allRows = doc.querySelectorAll('tr');
+      var results = [];
+      var seenIds = {};
+      for (var i = 0; i < allRows.length; i++) {
+        var row = allRows[i];
+        if (row.querySelector('a[href*="previewmatch.php"]')) continue;
+        var viewmatchLink = row.querySelector('a[href*="viewmatch.php"]');
+        if (!viewmatchLink) continue;
+        var rosterLinks = row.querySelectorAll('a[href*="roster.php"]');
+        if (rosterLinks.length < 2) continue;
+        var href = viewmatchLink.getAttribute('href') || '';
+        var matchIdMatch = href.match(/[?&]match_id=(\d+)/);
+        var dayMatch = href.match(/[?&]day=(\d+)/);
+        if (!matchIdMatch || !dayMatch) continue;
+        var matchId = matchIdMatch[1];
+        if (seenIds[matchId]) continue;
+        seenIds[matchId] = true;
+        var day = dayMatch[1];
+        var homeTeam = rosterLinks[0].textContent.trim();
+        var awayTeam = rosterLinks[1].textContent.trim();
+        var homeUrl = rosterLinks[0].getAttribute('href') || '';
+        var awayUrl = rosterLinks[1].getAttribute('href') || '';
+        var scoreEl = viewmatchLink.querySelector('b');
+        var score = scoreEl ? scoreEl.textContent.trim() : '';
+        if (!homeTeam || !awayTeam || !score) continue;
+        var matchUrl = SITE_CONFIG.BASE_URL + '/viewmatch.php?day=' + day + '&match_id=' + matchId;
+        results.push({ matchId: matchId, day: day, homeTeam: homeTeam, awayTeam: awayTeam, homeUrl: homeUrl, awayUrl: awayUrl, score: score, matchUrl: matchUrl });
+      }
+      return results;
+    }
+
+    function parseMovement(row) {
+      var imgs = row.querySelectorAll('img');
+      for (var i = 0; i < imgs.length; i++) {
+        var src = imgs[i].getAttribute('src') || '';
+        if (src.indexOf('go_up.gif') !== -1) return 'up';
+        if (src.indexOf('go_down.gif') !== -1) return 'down';
+      }
+      return 'neutral';
+    }
+
+    // ---- 8.2: renderDivisionSection ----
+
+    function renderDivisionSection(divName, divId) {
+      var section = document.createElement('div');
+      section.id = 'vsol-div-section-' + divId;
+      section.style.cssText = 'padding:8px;';
+
+      var loading = document.createElement('div');
+      loading.id = 'vsol-div-loading-' + divId;
+      loading.textContent = 'Загрузка...';
+      loading.style.cssText = 'color:#888; font-size:12px;';
+      section.appendChild(loading);
+
+      return section;
+    }
+
+    // ---- 8.4: renderDivisionTable ----
+
+    function renderDivisionTable(tableData, divName, divId) {
+      var table = document.createElement('table');
+      table.className = 'tbl';
+      table.id = 'vsol-div-table-' + divId;
+      table.style.cssText = 'border-collapse:collapse; width:100%; font-size:12px; margin-bottom:6px;';
+
+      var COL_KEYS = ['pos', 'move', 'team', 'games', 'wins', 'draws', 'losses', 'gf', 'ga', 'gd', 'pts', 'vs', 'rm'];
+      var COL_LABELS = ['М', '↕', 'Команда', 'И', 'В', 'Н', 'П', 'М+', 'М-', '+/-', 'О', 'Vs', 'РМ'];
+
+      // Header row
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      headerRow.id = 'vsol-div-table-header-' + divId;
+      headerRow.setAttribute('bgcolor', '#006600');
+      for (var h = 0; h < COL_LABELS.length; h++) {
+        var th = document.createElement('th');
+        th.id = 'vsol-div-col-' + COL_KEYS[h] + '-' + divId;
+        th.textContent = COL_LABELS[h];
+        th.style.cssText = 'color:#fff; padding:2px 4px; text-align:center; white-space:nowrap;';
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      // Data rows
+      var tbody = document.createElement('tbody');
+      var rows = tableData.rows;
+      for (var r = 0; r < rows.length; r++) {
+        var rowData = rows[r];
+        var tr = document.createElement('tr');
+        tr.id = 'vsol-div-table-row-' + divId + '-' + r;
+        tr.style.background = r % 2 === 0 ? '#fff' : '#f5f5f5';
+
+        var MOVE_EMOJI = { up: '🔼', down: '🔽', neutral: '➡️' };
+        var movementEmoji = MOVE_EMOJI[rowData.movement] || '➡️';
+
+        var cellValues = [
+          rowData.position,
+          movementEmoji,
+          '', // team cell — special handling below
+          rowData.games,
+          rowData.wins,
+          rowData.draws,
+          rowData.losses,
+          rowData.goalsFor,
+          rowData.goalsAgainst,
+          rowData.goalDiff,
+          rowData.points,
+          rowData.vs,
+          rowData.rm
+        ];
+
+        for (var c = 0; c < cellValues.length; c++) {
+          var td = document.createElement('td');
+          td.id = 'vsol-div-cell-' + COL_KEYS[c] + '-' + divId + '-' + r;
+          td.style.cssText = 'padding:2px 4px; text-align:center; white-space:nowrap;';
+          if (c === 2) {
+            // Team name cell — render as link
+            td.style.textAlign = 'left';
+            if (rowData.teamLink) {
+              var a = document.createElement('a');
+              var tl = rowData.teamLink;
+              // Normalize: if relative (no protocol), make root-relative
+              if (tl && !tl.startsWith('http')) {
+                tl = '/' + tl.replace(/^\//, '');
+              }
+              a.href = tl;
+              a.textContent = rowData.teamName;
+              a.className = 'mnu';
+              td.appendChild(a);
+            } else {
+              td.textContent = rowData.teamName;
+            }
+          } else {
+            td.textContent = cellValues[c];
+          }
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      return table;
+    }
+
+    // ---- 8.5: renderRoundSelector ----
+
+    function renderRoundSelector(tourInfo, divId, selectedTour, onTourChange) {
+      var wrapper = document.createElement('div');
+      wrapper.id = 'vsol-div-tour-wrapper-' + divId;
+      wrapper.style.cssText = 'margin-bottom:6px; font-size:12px;';
+
+      var label = document.createElement('label');
+      label.htmlFor = 'vsol-div-tour-sel-' + divId;
+      label.textContent = 'Тур: ';
+      wrapper.appendChild(label);
+
+      var select = document.createElement('select');
+      select.id = 'vsol-div-tour-sel-' + divId;
+
+      var tours = tourInfo.tours;
+      for (var i = 0; i < tours.length; i++) {
+        var opt = document.createElement('option');
+        opt.value = String(tours[i].tourNum);
+        opt.textContent = 'Тур ' + tours[i].tourNum;
+        if (tours[i].tourNum === selectedTour) opt.selected = true;
+        select.appendChild(opt);
+      }
+
+      select.addEventListener('change', function() {
+        var tourNum = parseInt(select.value, 10);
+        if (typeof onTourChange === 'function') onTourChange(tourNum);
+      });
+
+      wrapper.appendChild(select);
+      return wrapper;
+    }
+
+    // ---- 8.6: renderMatchList ----
+
+    function renderMatchList(matches, divId) {
+      console.log('[renderMatchList] divId=' + divId + ' matches=' + (matches ? matches.length : 0) + ' stack:', new Error().stack.split('\n').slice(1,4).join(' | '));
+      var container = document.createElement('div');
+      container.id = 'vsol-div-matches-' + divId;
+      container.style.cssText = 'margin-top:6px;';
+
+      if (!matches || matches.length === 0) {
+        var empty = document.createElement('div');
+        empty.id = 'vsol-div-matches-empty-' + divId;
+        empty.textContent = 'Матчи не найдены';
+        empty.style.cssText = 'color:#888; font-size:12px;';
+        container.appendChild(empty);
+        return container;
+      }
+
+      var table = document.createElement('table');
+      table.setAttribute('border', '0');
+      table.setAttribute('cellspacing', '0');
+      table.setAttribute('cellpadding', '0');
+      table.style.cssText = 'width:100%;';
+
+      var tbody = document.createElement('tbody');
+      table.appendChild(tbody);
+
+      for (var i = 0; i < matches.length; i++) {
+        var rows = renderMatchRow(matches[i], i);
+        tbody.appendChild(rows.matchTr);
+        tbody.appendChild(rows.detailsTr);
+      }
+
+      container.appendChild(table);
+      return container;
+    }
+
+    // ---- 9.1: renderMatchRow ----
+
+    // Returns { matchTr, detailsTr } — two <tr> elements for the match and its details
+    function renderMatchRow(match, index) {
+      // --- Match row: home (right) | score (center) | away (left) ---
+      var matchTr = document.createElement('tr');
+      matchTr.id = 'vsol-match-row-' + match.matchId;
+
+      // Home team — right-aligned
+      var tdHome = document.createElement('td');
+      tdHome.id = 'vsol-match-home-' + match.matchId;
+      tdHome.className = 'lh16 txtr';
+      tdHome.setAttribute('nowrap', 'nowrap');
+      tdHome.setAttribute('width', '45%');
+      var homeLink = document.createElement('a');
+      homeLink.className = 'mnu';
+      homeLink.textContent = match.homeTeam;
+      if (match.homeUrl) homeLink.href = '/' + match.homeUrl.replace(/^\//, '');
+      tdHome.appendChild(homeLink);
+      matchTr.appendChild(tdHome);
+
+      // Score — centered, links to match page
+      var tdScore = document.createElement('td');
+      tdScore.id = 'vsol-match-score-' + match.matchId;
+      tdScore.className = 'lh16 txtc';
+      tdScore.setAttribute('width', '10%');
+      tdScore.setAttribute('nowrap', 'nowrap');
+      var scoreLink = document.createElement('a');
+      scoreLink.id = 'vsol-match-link-' + match.matchId;
+      scoreLink.href = match.matchUrl;
+      scoreLink.target = '_blank';
+      scoreLink.className = 'mnu';
+      var scoreBold = document.createElement('b');
+      scoreBold.textContent = match.score;
+      scoreLink.appendChild(scoreBold);
+      tdScore.appendChild(scoreLink);
+      matchTr.appendChild(tdScore);
+
+      // Away team — left-aligned
+      var tdAway = document.createElement('td');
+      tdAway.id = 'vsol-match-away-' + match.matchId;
+      tdAway.className = 'lh16 txtl';
+      tdAway.setAttribute('nowrap', 'nowrap');
+      tdAway.setAttribute('width', '45%');
+      var awayLink = document.createElement('a');
+      awayLink.className = 'mnu';
+      awayLink.textContent = match.awayTeam;
+      if (match.awayUrl) awayLink.href = '/' + match.awayUrl.replace(/^\//, '');
+      tdAway.appendChild(awayLink);
+      matchTr.appendChild(tdAway);
+
+      // --- Details row ---
+      var detailsTr = document.createElement('tr');
+      detailsTr.id = 'vsol-match-details-row-' + match.matchId;
+
+      var detailsTd = document.createElement('td');
+      detailsTd.setAttribute('colspan', '3');
+      detailsTd.style.cssText = 'padding:0 0 4px 8px;';
+
+      var detailsDiv = document.createElement('div');
+      detailsDiv.id = 'vsol-match-details-' + match.matchId;
+      detailsDiv.style.cssText = 'font-size:11px; color:#888;';
+      detailsDiv.textContent = 'Загрузка...';
+
+      detailsTd.appendChild(detailsDiv);
+      detailsTr.appendChild(detailsTd);
+
+      return { matchTr: matchTr, detailsTr: detailsTr };
+    }
+
+    // ---- 9.3: renderMatchDetails ----
+
+    function renderMatchDetails(matchId, strength, events, comments, views) {
+      var container = document.getElementById('vsol-match-details-' + matchId);
+      if (!container) return;
+
+      // Clear loading indicator
+      container.textContent = '';
+
+      // Strength block
+      if (strength) {
+        var strengthDiv = document.createElement('div');
+        strengthDiv.id = 'vsol-match-strength-' + matchId;
+        strengthDiv.style.cssText = 'margin-top:3px;';
+
+        function renderStrengthRow(rowData) {
+          if (!rowData) return null;
+
+          var homeStronger = rowData.homeValue >= rowData.awayValue;
+          // Home is always left (red), away is always right (green) — fixed layout
+          var homeBg    = '#ff967e';
+          var awayBg    = '#87e878';
+          var homeColor = '#620';
+          var awayColor = '#060';
+          var diff = Math.abs(rowData.homeValue - rowData.awayValue);
+
+          var outerTable = document.createElement('table');
+          outerTable.setAttribute('width', '100%');
+          outerTable.setAttribute('align', 'center');
+          outerTable.setAttribute('cellspacing', '0');
+          outerTable.setAttribute('cellpadding', '0');
+          outerTable.style.cssText = 'margin:1px 0;';
+
+          var innerTable = document.createElement('table');
+          innerTable.className = 'tbl';
+          innerTable.setAttribute('border', '1');
+          innerTable.setAttribute('width', '100%');
+          innerTable.setAttribute('align', 'left');
+
+          var tr = document.createElement('tr');
+
+          // Label cell — fixed 20%
+          var labelTd = document.createElement('td');
+          labelTd.id = 'vsol-match-strength-label-' + matchId + '-' + rowData.label.replace(/\s+/g, '');
+          labelTd.height = '17';
+          labelTd.className = 'lh16 txtl';
+          labelTd.setAttribute('width', '20%');
+          labelTd.textContent = rowData.label;
+          tr.appendChild(labelTd);
+
+          // Home cell — proportional share of remaining 80%
+          var homeWidth = Math.round(rowData.homePercent * 0.8);
+          var homeTd = document.createElement('td');
+          homeTd.id = 'vsol-match-strength-home-' + matchId + '-' + rowData.label.replace(/\s+/g, '');
+          homeTd.height = '17';
+          homeTd.className = 'lh16 txtr';
+          homeTd.setAttribute('width', homeWidth + '%');
+          homeTd.setAttribute('bgcolor', homeBg);
+          var homeStrong = document.createElement('strong');
+          var homeFont = document.createElement('font');
+          homeFont.setAttribute('color', homeColor);
+          homeFont.textContent = String(rowData.homeValue);
+          if (homeStronger && diff > 0) {
+            var diffSpan = document.createElement('span');
+            diffSpan.style.cssText = 'font-size:9px';
+            diffSpan.textContent = '+' + diff;
+            homeFont.appendChild(diffSpan);
+          }
+          homeStrong.appendChild(homeFont);
+          homeTd.appendChild(homeStrong);
+          tr.appendChild(homeTd);
+
+          // Away cell — proportional share of remaining 80%
+          var awayWidth = Math.round(rowData.awayPercent * 0.8);
+          var awayTd = document.createElement('td');
+          awayTd.id = 'vsol-match-strength-away-' + matchId + '-' + rowData.label.replace(/\s+/g, '');
+          awayTd.height = '17';
+          awayTd.className = 'lh16 txt';
+          awayTd.setAttribute('width', awayWidth + '%');
+          awayTd.setAttribute('bgcolor', awayBg);
+          var awayStrong = document.createElement('strong');
+          var awayFont = document.createElement('font');
+          awayFont.setAttribute('color', awayColor);
+          awayFont.textContent = String(rowData.awayValue);
+          if (!homeStronger && diff > 0) {
+            var diffSpan2 = document.createElement('span');
+            diffSpan2.style.cssText = 'font-size:9px';
+            diffSpan2.textContent = '+' + diff;
+            awayFont.appendChild(diffSpan2);
+          }
+          awayStrong.appendChild(awayFont);
+          awayTd.appendChild(awayStrong);
+          tr.appendChild(awayTd);
+
+          innerTable.appendChild(tr);
+          var outerTd = document.createElement('td');
+          outerTd.style.cssText = 'border:0';
+          outerTd.appendChild(innerTable);
+          var outerTr = document.createElement('tr');
+          outerTr.appendChild(outerTd);
+          outerTable.appendChild(outerTr);
+          return outerTable;
+        }
+
+        var startLine = renderStrengthRow(strength.start);
+        if (startLine) strengthDiv.appendChild(startLine);
+        var endLine = renderStrengthRow(strength.end);
+        if (endLine) strengthDiv.appendChild(endLine);
+
+        container.appendChild(strengthDiv);
+      }
+
+      // Events block
+      if (events && events.length > 0) {
+        var eventsDiv = document.createElement('div');
+        eventsDiv.id = 'vsol-match-events-' + matchId;
+        eventsDiv.style.cssText = 'margin-top:3px;';
+
+        for (var ei = 0; ei < events.length; ei++) {
+          var ev = events[ei];
+          var evLine = document.createElement('div');
+          evLine.id = 'vsol-match-event-' + matchId + '-' + ei;
+          evLine.style.cssText = 'margin:1px 0;';
+          var evText = ev.minute + '\'' + ' ' + ev.playerName;
+          if (ev.score) evText += ' (' + ev.score + ')';
+          evLine.textContent = evText;
+          eventsDiv.appendChild(evLine);
+        }
+
+        container.appendChild(eventsDiv);
+      }
+
+      // Comments block
+      if (comments && comments.length > 0) {
+        var commentsDiv = document.createElement('div');
+        commentsDiv.id = 'vsol-match-comments-' + matchId;
+        commentsDiv.style.cssText = 'margin-top:3px;';
+
+        // Separate coach comments by side/timing and match comments
+        var coachGrid = { home_before: null, away_before: null, home_after: null, away_after: null };
+        var matchComments = [];
+
+        for (var ci = 0; ci < comments.length; ci++) {
+          var cm = comments[ci];
+          if (cm.type === 'coach' && cm.side && cm.timing) {
+            coachGrid[cm.side + '_' + cm.timing] = cm;
+          } else {
+            matchComments.push(cm);
+          }
+        }
+
+        var hasCoach = coachGrid.home_before || coachGrid.away_before || coachGrid.home_after || coachGrid.away_after;
+
+        // Render 2x2 coach grid if any coach comments exist
+        if (hasCoach) {
+          var coachTable = document.createElement('table');
+          coachTable.id = 'vsol-match-coach-' + matchId;
+          coachTable.setAttribute('width', '100%');
+          coachTable.setAttribute('cellspacing', '0');
+          coachTable.setAttribute('cellpadding', '2');
+
+          function makeCoachCell(cm, idSuffix) {
+            var td = document.createElement('td');
+            td.id = 'vsol-match-coach-' + idSuffix + '-' + matchId;
+            td.setAttribute('width', '50%');
+            td.setAttribute('valign', 'top');
+            td.style.cssText = 'font-size:11px; border:1px solid #eee; padding:3px;';
+            if (cm) {
+              var nickSpan = document.createElement('span');
+              nickSpan.style.cssText = 'font-weight:bold; color:#444;';
+              nickSpan.textContent = cm.nick + (cm.team ? ' (' + cm.team + ')' : '') + ': ';
+              td.appendChild(nickSpan);
+              td.appendChild(document.createTextNode(cm.text));
+            } else {
+              td.style.color = '#bbb';
+              td.textContent = '—';
+            }
+            return td;
+          }
+
+          // Before row
+          var hasBefore = coachGrid.home_before || coachGrid.away_before;
+          if (hasBefore) {
+            var trBefore = document.createElement('tr');
+            trBefore.id = 'vsol-match-coach-before-' + matchId;
+            trBefore.appendChild(makeCoachCell(coachGrid.home_before, 'home-before'));
+            trBefore.appendChild(makeCoachCell(coachGrid.away_before, 'away-before'));
+            coachTable.appendChild(trBefore);
+          }
+
+          // After row
+          var hasAfter = coachGrid.home_after || coachGrid.away_after;
+          if (hasAfter) {
+            var trAfter = document.createElement('tr');
+            trAfter.id = 'vsol-match-coach-after-' + matchId;
+            trAfter.appendChild(makeCoachCell(coachGrid.home_after, 'home-after'));
+            trAfter.appendChild(makeCoachCell(coachGrid.away_after, 'away-after'));
+            coachTable.appendChild(trAfter);
+          }
+
+          commentsDiv.appendChild(coachTable);
+        }
+
+        // Render match comments full width
+        for (var mi = 0; mi < matchComments.length; mi++) {
+          var mc = matchComments[mi];
+          var mcLine = document.createElement('div');
+          mcLine.id = 'vsol-match-comment-' + matchId + '-' + mi;
+          mcLine.style.cssText = 'margin:1px 0; font-size:11px;';
+          var mcNick = document.createElement('span');
+          mcNick.style.cssText = 'font-weight:bold; color:#444;';
+          mcNick.textContent = (mc.nick || mc.managerNick || '') + ': ';
+          mcLine.appendChild(mcNick);
+          mcLine.appendChild(document.createTextNode(mc.text));
+          commentsDiv.appendChild(mcLine);
+        }
+
+        container.appendChild(commentsDiv);
+      }
+
+      // Views block
+      if (views) {
+        var viewsDiv = document.createElement('div');
+        viewsDiv.id = 'vsol-match-views-' + matchId;
+        viewsDiv.style.cssText = 'margin-top:3px; color:#666;';
+
+        var viewsText = 'Просмотров: ' + views.count;
+        if (views.viewers && views.viewers.length > 0) {
+          viewsText += ' (' + views.viewers.join(', ') + ')';
+        }
+        viewsDiv.textContent = viewsText;
+
+        container.appendChild(viewsDiv);
+      }
+    }
+
+    // ---- 9.2: loadMatchDetailsSequentially ----
+
+    function loadMatchDetailsSequentially(matches) {
+      console.log('[loadMatchDetailsSequentially] matches=' + (matches ? matches.length : 0) + ' ids=' + (matches ? matches.map(function(m){return m.matchId;}).join(',') : '') + ' stack:', new Error().stack.split('\n').slice(1,4).join(' | '));
+      if (!matches || matches.length === 0) return;
+
+      // Inline: parseMatchStrength
+      function parseMatchStrength(html) {
+        if (!html) return null;
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+
+        function parseStrengthCell(td) {
+          var valueText = '';
+          for (var i = 0; i < td.childNodes.length; i++) {
+            if (td.childNodes[i].nodeType === 3) valueText += td.childNodes[i].textContent;
+          }
+          var value = parseInt(valueText.trim(), 10);
+          if (isNaN(value)) return null;
+          var boldEl = td.querySelector('b');
+          if (!boldEl) return null;
+          var percent = parseInt(boldEl.textContent.trim().replace('%', ''), 10);
+          if (isNaN(percent)) return null;
+          return { value: value, percent: percent };
+        }
+
+        function parseStrengthRow(doc, labelText) {
+          var allTds = doc.querySelectorAll('td');
+          var labelTd = null;
+          for (var i = 0; i < allTds.length; i++) {
+            var td = allTds[i];
+            var text = '';
+            for (var j = 0; j < td.childNodes.length; j++) {
+              if (td.childNodes[j].nodeType === 3) text += td.childNodes[j].textContent;
+            }
+            if (text.trim() === labelText) { labelTd = td; break; }
+          }
+          if (!labelTd) return null;
+          var tr = labelTd.closest('tr');
+          if (!tr) return null;
+          var rdl = tr.querySelector('td.rdl');
+          var gdl = tr.querySelector('td.gdl');
+          if (!rdl || !gdl) return null;
+          var homeData = parseStrengthCell(rdl);
+          var awayData = parseStrengthCell(gdl);
+          if (!homeData || !awayData) return null;
+          return {
+            label: labelText,
+            homeValue: homeData.value,
+            homePercent: homeData.percent,
+            awayValue: awayData.value,
+            awayPercent: awayData.percent,
+            diff: awayData.value - homeData.value
+          };
+        }
+
+        var startRow = parseStrengthRow(doc, 'Сила в начале матча');
+        var endRow = parseStrengthRow(doc, 'Сила в конце матча');
+        if (!startRow && !endRow) return null;
+        return { start: startRow, end: endRow };
+      }
+
+      // Inline: parseMatchEvents
+      function parseMatchEvents(html) {
+        if (!html) return [];
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var rows = doc.querySelectorAll('tr[bgcolor="#c9f2c5"], tr[bgcolor="#eddac7"]');
+        var events = [];
+
+        for (var i = 0; i < rows.length; i++) {
+          var row = rows[i];
+          var tds = row.querySelectorAll('td');
+          if (tds.length === 0) continue;
+
+          // Detect event type
+          var type = null;
+          var titleMap = { 'Гол': 'goal', 'Желтая карточка': 'yellow', 'Красная карточка': 'red', 'Замена': 'sub' };
+          var imgs = row.querySelectorAll('img[title]');
+          for (var ii = 0; ii < imgs.length; ii++) {
+            var t = imgs[ii].getAttribute('title') || '';
+            if (titleMap[t]) { type = titleMap[t]; break; }
+          }
+          if (!type) {
+            var tdTitles = row.querySelectorAll('td[title]');
+            for (var jj = 0; jj < tdTitles.length; jj++) {
+              var tt = tdTitles[jj].getAttribute('title') || '';
+              if (titleMap[tt]) { type = titleMap[tt]; break; }
+            }
+          }
+          if (type !== 'goal') continue;
+
+          var minute = tds[0].textContent.trim();
+          if (!minute) minute = '?';
+          var playerLinks = row.querySelectorAll('a.mnu');
+          if (playerLinks.length === 0) continue;
+          var playerName = playerLinks[0].textContent.trim();
+          if (!playerName) continue;
+          var score = tds[tds.length - 1].textContent.trim();
+
+          events.push({ type: 'goal', minute: minute, playerName: playerName, score: score || undefined });
+        }
+
+        events.sort(function(a, b) {
+          var pa = a.minute.split('+'); var pb = b.minute.split('+');
+          var va = (parseInt(pa[0], 10) || 0) + (pa[1] ? (parseInt(pa[1], 10) || 0) * 0.01 : 0);
+          var vb = (parseInt(pb[0], 10) || 0) + (pb[1] ? (parseInt(pb[1], 10) || 0) * 0.01 : 0);
+          return va - vb;
+        });
+        return events;
+      }
+
+      // Inline: parseMatchComments
+      function parseMatchComments(html) {
+        if (!html) return [];
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        var results = [];
+
+        function findNextTobl(headingText) {
+          var bolds = doc.querySelectorAll('b');
+          for (var bi = 0; bi < bolds.length; bi++) {
+            if (bolds[bi].textContent.indexOf(headingText) === -1) continue;
+            var el = bolds[bi];
+            while (el && !(el.tagName === 'TABLE' && el.className.indexOf('tobl') !== -1)) {
+              el = el.parentElement;
+            }
+            if (!el) continue;
+            var sib = el.nextElementSibling;
+            while (sib) {
+              if (sib.tagName === 'TABLE' && sib.className.indexOf('tobl') !== -1) return sib;
+              sib = sib.nextElementSibling;
+            }
+          }
+          return null;
+        }
+
+        // 1. Coach comments: «Комментарии тренеров команд:»
+        var coachTobl = findNextTobl('Комментарии тренеров команд');
+        if (coachTobl) {
+          var nolTable = coachTobl.querySelector('table.nol');
+          if (nolTable) {
+            var nolRows = nolTable.querySelectorAll('tr');
+            for (var ri = 0; ri < nolRows.length; ri++) {
+              var tds = nolRows[ri].querySelectorAll(':scope > td');
+              if (tds.length < 2) continue;
+              // Determine timing
+              var timing = null;
+              for (var ti = 0; ti < tds.length; ti++) {
+                var bolds2 = tds[ti].querySelectorAll('b');
+                for (var bi2 = 0; bi2 < bolds2.length; bi2++) {
+                  var bt = bolds2[bi2].textContent.toLowerCase();
+                  if (bt.indexOf('до матча') !== -1 || bt.indexOf('перед матчем') !== -1) { timing = 'before'; break; }
+                  if (bt.indexOf('после матча') !== -1) { timing = 'after'; break; }
+                }
+                if (timing) break;
+              }
+              if (!timing) continue;
+              var sides = ['home', 'away'];
+              for (var si = 0; si < 2; si++) {
+                var td = tds[si];
+                var commentDiv = td.querySelector('div[style*="padding-top:5px"]');
+                if (!commentDiv) continue;
+                var text = commentDiv.textContent;
+                var textMatch = text.match(/\):\s*"([^"]+)"/);
+                if (!textMatch) continue;
+                var links = commentDiv.querySelectorAll('a b');
+                var nick = links.length > 0 ? links[links.length - 1].textContent.trim() : '';
+                if (!nick) continue;
+                var team = '';
+                var bolds3 = commentDiv.querySelectorAll('b');
+                for (var bi3 = 0; bi3 < bolds3.length; bi3++) {
+                  if (!bolds3[bi3].closest('a')) { team = bolds3[bi3].textContent.trim(); break; }
+                }
+                results.push({ type: 'coach', side: sides[si], timing: timing, nick: nick, team: team, text: textMatch[1].trim() });
+              }
+            }
+          }
+        }
+
+        // 2. Match comments: «Комментарии к матчу:»
+        var matchTobl = findNextTobl('Комментарии к матчу');
+        if (matchTobl) {
+          var rows = matchTobl.querySelectorAll('tr[id^="c"]');
+          for (var ri2 = 0; ri2 < rows.length; ri2++) {
+            var id = rows[ri2].id.replace('c', '');
+            if (!id || isNaN(Number(id))) continue;
+            var nickSpan = rows[ri2].querySelector('span[id="nick' + id + '"]');
+            if (!nickSpan) continue;
+            var nick2 = nickSpan.textContent.trim();
+            if (!nick2) continue;
+            var messDiv = rows[ri2].querySelector('div[id="mess' + id + '"]');
+            var textDiv = rows[ri2].querySelector('div[id="id' + id + '"]');
+            var rawText = messDiv ? messDiv.textContent.trim() : (textDiv ? textDiv.textContent.trim() : '');
+            if (!rawText) continue;
+            results.push({ type: 'match', nick: nick2, text: rawText });
+          }
+        }
+
+        return results;
+      }
+
+      // Inline: parseMatchViews
+      function parseMatchViews(html) {
+        if (!html) return null;
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+
+        // Find <b> containing "Матч посетили N менеджеров:"
+        var bolds = doc.querySelectorAll('b');
+        for (var i = 0; i < bolds.length; i++) {
+          var b = bolds[i];
+          var bText = b.textContent;
+          if (bText.indexOf('посетили') === -1) continue;
+          var numMatch = bText.match(/(\d+)/);
+          if (!numMatch) continue;
+          var count = parseInt(numMatch[1], 10);
+          // Viewer links are siblings of <b> inside the parent <p>
+          var parent = b.parentNode;
+          var viewers = [];
+          var links = parent.querySelectorAll('a[href*="v3_profile.php"]');
+          for (var li = 0; li < links.length; li++) {
+            var nick = links[li].textContent.trim();
+            if (nick) viewers.push(nick);
+          }
+          if (viewers.length === 0) {
+            links = parent.querySelectorAll('a[href*="managerzone.php"]');
+            for (var li2 = 0; li2 < links.length; li2++) {
+              var nick2 = links[li2].textContent.trim();
+              if (nick2) viewers.push(nick2);
+            }
+          }
+          return { count: count, viewers: viewers };
+        }
+        return null;
+      }
+
+      var mIndex = 0;
+      var total = matches.length;
+      var results = new Array(total); // store parsed data indexed by position
+
+      // Progress bar
+      var progressId = 'vsol-match-progress-' + matches[0].matchId;
+      var progressWrap = document.createElement('div');
+      progressWrap.id = progressId;
+      progressWrap.style.cssText = 'margin:4px 0; font-size:11px; color:#555;';
+
+      var progressBar = document.createElement('div');
+      progressBar.style.cssText = 'height:4px; background:#e0e0e0; border-radius:2px; margin-top:2px;';
+      var progressFill = document.createElement('div');
+      progressFill.style.cssText = 'height:4px; background:#009900; border-radius:2px; width:0%; transition:width 0.2s;';
+      progressBar.appendChild(progressFill);
+
+      var progressText = document.createElement('span');
+      progressText.textContent = 'Загрузка матчей: 0 / ' + total;
+      progressWrap.appendChild(progressText);
+      progressWrap.appendChild(progressBar);
+
+      // Insert progress bar before the match table (inside vsol-div-matches container)
+      var firstMatchRow = document.getElementById('vsol-match-row-' + matches[0].matchId);
+      var matchesParent = firstMatchRow ? firstMatchRow.closest('[id^="vsol-div-matches-"]') : null;
+      if (matchesParent) {
+        matchesParent.insertBefore(progressWrap, matchesParent.firstChild);
+      }
+
+      // Hide all details divs while loading
+      for (var hi = 0; hi < matches.length; hi++) {
+        var detEl = document.getElementById('vsol-match-details-' + matches[hi].matchId);
+        if (detEl) detEl.style.display = 'none';
+      }
+
+      function loadNextMatch() {
+        if (mIndex >= matches.length) return;
+        var matchIndex = mIndex;
+        var match = matches[matchIndex];
+        mIndex++;
+
+        // Check cache first
+        var cached = getMatchDetailsCache(match.matchId);
+        if (cached) {
+          results[matchIndex] = cached;
+          var done = matchIndex + 1;
+          progressText.textContent = 'Загрузка матчей: ' + done + ' / ' + total;
+          progressFill.style.width = Math.round(done / total * 100) + '%';
+          if (done === total) {
+            for (var ri = 0; ri < matches.length; ri++) {
+              var detailsEl = document.getElementById('vsol-match-details-' + matches[ri].matchId);
+              if (!detailsEl) continue;
+              detailsEl.style.display = '';
+              if (results[ri] && results[ri].error) {
+                detailsEl.textContent = 'Ошибка загрузки матча';
+              } else if (results[ri]) {
+                renderMatchDetails(matches[ri].matchId, results[ri].strength, results[ri].events, results[ri].comments, results[ri].views);
+              }
+            }
+            if (progressWrap.parentNode) progressWrap.parentNode.removeChild(progressWrap);
+          }
+          // No delay needed for cache hits — process next immediately
+          loadNextMatch();
+          return;
+        }
+
+        var url = SITE_CONFIG.BASE_URL + '/viewmatch.php?day=' + match.day + '&match_id=' + match.matchId;
+        httpGet(url, function(errM, html) {
+          var done = matchIndex + 1;
+
+          if (errM || !html) {
+            results[matchIndex] = { error: true };
+          } else {
+            var parsed = {
+              strength: parseMatchStrength(html),
+              events: parseMatchEvents(html),
+              comments: parseMatchComments(html),
+              views: parseMatchViews(html)
+            };
+            results[matchIndex] = parsed;
+            setMatchDetailsCache(match.matchId, parsed);
+          }
+
+          // Update progress bar
+          progressText.textContent = 'Загрузка матчей: ' + done + ' / ' + total;
+          progressFill.style.width = Math.round(done / total * 100) + '%';
+
+          if (done === total) {
+            // All loaded — render all details and remove progress bar
+            for (var ri = 0; ri < matches.length; ri++) {
+              var detailsEl = document.getElementById('vsol-match-details-' + matches[ri].matchId);
+              if (!detailsEl) continue;
+              detailsEl.style.display = '';
+              if (results[ri] && results[ri].error) {
+                detailsEl.textContent = 'Ошибка загрузки матча';
+              } else if (results[ri]) {
+                renderMatchDetails(matches[ri].matchId, results[ri].strength, results[ri].events, results[ri].comments, results[ri].views);
+              }
+            }
+            if (progressWrap.parentNode) progressWrap.parentNode.removeChild(progressWrap);
+          }
+
+          setTimeout(loadNextMatch, 300);
+        });
+      }
+
+      loadNextMatch();
+    }
+
+    // ---- Match details cache (localStorage, 7-day TTL) ----
+
+    var MATCH_DETAILS_TTL = 7 * 24 * 60 * 60 * 1000;
+
+    function getMatchDetailsCache(matchId) {
+      try {
+        var raw = localStorage.getItem('vsol_md_' + matchId);
+        if (!raw) return null;
+        var entry = JSON.parse(raw);
+        if (!entry || Date.now() - entry.time > MATCH_DETAILS_TTL) return null;
+        return entry.data;
+      } catch (e) { return null; }
+    }
+
+    function setMatchDetailsCache(matchId, data) {
+      try {
+        localStorage.setItem('vsol_md_' + matchId, JSON.stringify({ data: data, time: Date.now() }));
+      } catch (e) {}
+    }
+
+    function clearMatchDetailsCache(matchIds) {
+      try {
+        for (var i = 0; i < matchIds.length; i++) {
+          localStorage.removeItem('vsol_md_' + matchIds[i]);
+        }
+      } catch (e) {}
+    }
+
+    // ---- 8.3: loadDivisionsSequentially ----
+
+    function loadDivision(divId, divName) {
+      console.log('[loadDivision] divId=' + divId + ' divName=' + divName);
+      var section = document.getElementById('vsol-div-section-' + divId);
+      if (!section) return;
+
+      // Step 1: get tour info to find lastTour
+      httpGet(SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divId + '&tblshow=1', function(err1, html1) {
+        if (err1 || !html1) {
+          var loadingEl = document.getElementById('vsol-div-loading-' + divId);
+          if (loadingEl) loadingEl.textContent = 'Ошибка загрузки ' + divName;
+          return;
+        }
+
+        var tourInfo = parseTourInfo(html1);
+        // currentTour = red-marked (upcoming) tour; lastTour = last played = currentTour - 1
+        var lastTour = Math.max(1, tourInfo.currentTour - 1);
+
+        // Step 2: get division table + match list for lastTour
+        setTimeout(function() {
+          httpGet(SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divId + '&tblshow=1&tour=' + lastTour, function(err2, html2) {
+            var loadingEl = document.getElementById('vsol-div-loading-' + divId);
+
+            if (err2 || !html2) {
+              if (loadingEl) loadingEl.textContent = 'Ошибка загрузки ' + divName;
+              return;
+            }
+
+            var tableData = parseDivisionTable(html2);
+            var matches = parseMatchList(html2);
+
+            // Remove loading indicator
+            if (loadingEl) loadingEl.parentNode.removeChild(loadingEl);
+
+            // Render round selector — pre-select lastTour (currentTour - 1)
+            var roundSelector = renderRoundSelector(tourInfo, divId, lastTour, function(tourNum) {
+              var sel = document.getElementById('vsol-div-tour-sel-' + divId);
+              if (sel) sel.disabled = true;
+              httpGet(SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divId + '&tblshow=1&tour=' + tourNum, function(errT, htmlT) {
+                if (sel) sel.disabled = false;
+                if (errT || !htmlT) return;
+                var newTableData = parseDivisionTable(htmlT);
+                var newMatches = parseMatchList(htmlT);
+                var oldTable = document.getElementById('vsol-div-table-' + divId);
+                if (oldTable && newTableData) {
+                  var newTable = renderDivisionTable(newTableData, divName, divId);
+                  oldTable.parentNode.replaceChild(newTable, oldTable);
+                }
+                var oldMatches = document.getElementById('vsol-div-matches-' + divId);
+                if (oldMatches) {
+                  var newMatchList = renderMatchList(newMatches, divId);
+                  oldMatches.parentNode.replaceChild(newMatchList, oldMatches);
+                  loadMatchDetailsSequentially(newMatches);
+                }
+              });
+            });
+            section.appendChild(roundSelector);
+
+            if (tableData) {
+              var tableEl = renderDivisionTable(tableData, divName, divId);
+              section.appendChild(tableEl);
+            } else {
+              var noTable = document.createElement('div');
+              noTable.id = 'vsol-div-notable-' + divId;
+              noTable.textContent = 'Таблица не найдена';
+              noTable.style.cssText = 'color:#888; font-size:12px;';
+              section.appendChild(noTable);
+            }
+
+            var matchListEl = renderMatchList(matches, divId);
+            console.log('[loadDivision] appending matchList for divId=' + divId + ' matches=' + matches.length);
+            section.appendChild(matchListEl);
+
+            // Reload button — clears cache for this division's matches and reloads
+            var reloadBtn = document.createElement('button');
+            reloadBtn.id = 'vsol-div-reload-' + divId;
+            reloadBtn.textContent = '🔄 Перезагрузить';
+            reloadBtn.style.cssText = 'margin-top:6px; padding:2px 8px; font-size:11px; cursor:pointer; border:1px solid #009900; background:#f0fff0; border-radius:3px;';
+            reloadBtn.onclick = function() {
+              clearMatchDetailsCache(matches.map(function(m) { return m.matchId; }));
+              // Remove existing content and re-run loadDivision
+              while (section.firstChild) section.removeChild(section.firstChild);
+              var newLoading = document.createElement('div');
+              newLoading.id = 'vsol-div-loading-' + divId;
+              newLoading.textContent = 'Загрузка...';
+              newLoading.style.cssText = 'color:#888; font-size:12px;';
+              section.appendChild(newLoading);
+              loadDivision(divId, divName);
+            };
+            section.appendChild(reloadBtn);
+
+            loadMatchDetailsSequentially(matches);
+          });
+        }, 300);
+      });
+    }
+
+    // ---- 8.1: loadCalculatorData ----
+
+    function loadCalculatorData(nationId) {
+      // Show loading indicator
+      var loadingDiv = document.createElement('div');
+      loadingDiv.id = 'vsol-calc-loading';
+      loadingDiv.textContent = 'Загрузка данных...';
+      loadingDiv.style.cssText = 'color:#888; font-size:13px; margin-bottom:8px;';
+      calcPanel.appendChild(loadingDiv);
+
+      httpGet(SITE_CONFIG.BASE_URL + '/teams_cntr.php?num=' + nationId, function(err, html) {
+        if (loadingDiv.parentNode) loadingDiv.parentNode.removeChild(loadingDiv);
+
+        if (err || !html) {
+          var errDiv = document.createElement('div');
+          errDiv.id = 'vsol-calc-error';
+          errDiv.textContent = 'Ошибка загрузки данных федерации';
+          calcPanel.appendChild(errDiv);
+          return;
+        }
+
+        var divisions = parseDivisionLinks(html);
+
+        if (!divisions || divisions.length === 0) {
+          var noneDiv = document.createElement('div');
+          noneDiv.id = 'vsol-calc-nodivisions';
+          noneDiv.textContent = 'Дивизионы не найдены';
+          calcPanel.appendChild(noneDiv);
+          return;
+        }
+
+        // Build division tab bar
+        var divTabBar = document.createElement('div');
+        divTabBar.id = 'vsol-div-tab-bar';
+        divTabBar.style.cssText = 'display:flex; flex-wrap:wrap; gap:2px; margin-bottom:6px;';
+        calcPanel.appendChild(divTabBar);
+
+        // Build content area
+        var divContent = document.createElement('div');
+        divContent.id = 'vsol-div-content';
+        divContent.style.cssText = 'border:1px solid #ccc; padding:8px; min-height:40px;';
+        calcPanel.appendChild(divContent);
+
+        // Track which divisions have been loaded
+        var loaded = {};
+        var activeDivId = null;
+
+        function activateDivTab(divId, divName) {
+          console.log('[activateDivTab] divId=' + divId + ' loaded=' + JSON.stringify(loaded));
+          // Update tab styles
+          var tabs = divTabBar.querySelectorAll('[id^="vsol-div-tab-"]');
+          for (var t = 0; t < tabs.length; t++) {
+            var isActive = tabs[t].id === 'vsol-div-tab-' + divId;
+            tabs[t].style.fontWeight = isActive ? 'bold' : 'normal';
+            tabs[t].style.background = isActive ? '#fff' : '#f0f0f0';
+            tabs[t].style.borderBottom = isActive ? '1px solid #fff' : '1px solid #ccc';
+          }
+
+          // Show/hide section panels
+          var sections = divContent.querySelectorAll('[id^="vsol-div-section-"]');
+          for (var s = 0; s < sections.length; s++) {
+            sections[s].style.display = 'none';
+          }
+
+          activeDivId = divId;
+
+          // Create section if first visit
+          if (!loaded[divId]) {
+            loaded[divId] = true;
+            var section = renderDivisionSection(divName, divId);
+            divContent.appendChild(section);
+          }
+
+          // Show active section
+          var activeSection = document.getElementById('vsol-div-section-' + divId);
+          if (activeSection) activeSection.style.display = '';
+
+          // Load data on first visit
+          if (!loaded[divId + '_fetched']) {
+            loaded[divId + '_fetched'] = true;
+            loadDivision(divId, divName);
+          }
+        }
+
+        // Create a tab for each division
+        for (var i = 0; i < divisions.length; i++) {
+          (function(div) {
+            var tab = document.createElement('div');
+            tab.id = 'vsol-div-tab-' + div.divisionId;
+            tab.textContent = div.name;
+            tab.style.cssText = 'padding:3px 10px; cursor:pointer; border:1px solid #ccc; background:#f0f0f0; font-size:12px;';
+            tab.addEventListener('click', function() {
+              activateDivTab(div.divisionId, div.name);
+            });
+            divTabBar.appendChild(tab);
+          })(divisions[i]);
+        }
+
+        // Activate first division by default
+        activateDivTab(divisions[0].divisionId, divisions[0].name);
+      });
+    }
+
+  }
+
+  // ========== Division Match Comments (fed_news.php) ==========
+
+  // Shared parse helpers used by initDivisionMatchComments
+  function parseMatchHeaderLocal(html) {
+    // Extracts home team, away team, score and their roster links from viewmatch.php
+    if (!html) return null;
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    // The match header row contains two roster.php links and a <b>score</b>
+    var rosterLinks = doc.querySelectorAll('a[href*="roster.php"].mnuw');
+    if (rosterLinks.length < 2) return null;
+    var homeHref = rosterLinks[0].getAttribute('href') || '';
+    var awayHref = rosterLinks[1].getAttribute('href') || '';
+    // Normalize to root-relative
+    if (homeHref && !homeHref.startsWith('http') && !homeHref.startsWith('/')) homeHref = '/' + homeHref;
+    if (awayHref && !awayHref.startsWith('http') && !awayHref.startsWith('/')) awayHref = '/' + awayHref;
+    // Extract bold team names (first <b> inside each link)
+    var homeB = rosterLinks[0].querySelector('b');
+    var awayB = rosterLinks[1].querySelector('b');
+    var homeTeam = homeB ? homeB.textContent.trim() : rosterLinks[0].textContent.trim();
+    var awayTeam = awayB ? awayB.textContent.trim() : rosterLinks[1].textContent.trim();
+    // Score: find <b> that looks like N:N near the roster links
+    var row = rosterLinks[0].closest('tr');
+    var score = '';
+    if (row) {
+      var bolds = row.querySelectorAll('b');
+      for (var bi = 0; bi < bolds.length; bi++) {
+        if (/^\d+:\d+$/.test(bolds[bi].textContent.trim())) {
+          score = bolds[bi].textContent.trim();
+          break;
+        }
+      }
+    }
+    return { homeTeam: homeTeam, awayTeam: awayTeam, homeHref: homeHref, awayHref: awayHref, score: score };
+  }
+
+  function parseMatchStrengthLocal(html) {
+    if (!html) return null;
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    function parseCell(td) {
+      var v = ''; for (var i = 0; i < td.childNodes.length; i++) { if (td.childNodes[i].nodeType === 3) v += td.childNodes[i].textContent; }
+      var val = parseInt(v.trim(), 10); if (isNaN(val)) return null;
+      var b = td.querySelector('b'); if (!b) return null;
+      var pct = parseInt(b.textContent.trim().replace('%',''), 10); if (isNaN(pct)) return null;
+      return { value: val, percent: pct };
+    }
+    function parseRow(labelText) {
+      var tds = doc.querySelectorAll('td'); var labelTd = null;
+      for (var i = 0; i < tds.length; i++) {
+        var t = ''; for (var j = 0; j < tds[i].childNodes.length; j++) { if (tds[i].childNodes[j].nodeType === 3) t += tds[i].childNodes[j].textContent; }
+        if (t.trim() === labelText) { labelTd = tds[i]; break; }
+      }
+      if (!labelTd) return null;
+      var tr = labelTd.closest('tr'); if (!tr) return null;
+      var rdl = tr.querySelector('td.rdl'); var gdl = tr.querySelector('td.gdl');
+      if (!rdl || !gdl) return null;
+      var h = parseCell(rdl); var a = parseCell(gdl); if (!h || !a) return null;
+      return { label: labelText, homeValue: h.value, homePercent: h.percent, awayValue: a.value, awayPercent: a.percent, diff: a.value - h.value };
+    }
+    var s = parseRow('Сила в начале матча'); var e = parseRow('Сила в конце матча');
+    if (!s && !e) return null;
+    return { start: s, end: e };
+  }
+
+  function parseMatchEventsLocal(html) {
+    if (!html) return [];
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var rows = doc.querySelectorAll('tr[bgcolor="#c9f2c5"], tr[bgcolor="#eddac7"]');
+    var events = [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i]; var tds = row.querySelectorAll('td'); if (!tds.length) continue;
+      var type = null;
+      var titleMap = { 'Гол': 'goal' };
+      var imgs = row.querySelectorAll('img[title]');
+      for (var ii = 0; ii < imgs.length; ii++) { if (titleMap[imgs[ii].getAttribute('title')]) { type = titleMap[imgs[ii].getAttribute('title')]; break; } }
+      if (!type) { var tdts = row.querySelectorAll('td[title]'); for (var jj = 0; jj < tdts.length; jj++) { if (titleMap[tdts[jj].getAttribute('title')]) { type = titleMap[tdts[jj].getAttribute('title')]; break; } } }
+      if (type !== 'goal') continue;
+      var minute = tds[0].textContent.trim(); if (!minute) minute = '?';
+      var pl = row.querySelectorAll('a.mnu'); if (!pl.length) continue;
+      var playerName = pl[0].textContent.trim(); if (!playerName) continue;
+      var score = tds[tds.length - 1].textContent.trim();
+      var desc = '';
+      for (var di = 0; di < tds.length; di++) {
+        if (tds[di].querySelector('a.mnu')) {
+          var res = ''; var nodes = tds[di].childNodes;
+          for (var ni = 0; ni < nodes.length; ni++) {
+            if (nodes[ni].nodeType === 3) { res += nodes[ni].textContent; }
+            else if (nodes[ni].nodeType === 1 && nodes[ni].tagName === 'A') {
+              var href = nodes[ni].getAttribute('href') || '';
+              if (href && !href.startsWith('http') && !href.startsWith('/')) href = '/' + href;
+              res += '[a href=' + href + ' target="_blank"]' + nodes[ni].textContent.trim() + '[/a]';
+            }
+          }
+          desc = res.trim(); break;
+        }
+      }
+      events.push({ type: 'goal', minute: minute, playerName: playerName, score: score || undefined, descriptionBBCode: desc || undefined });
+    }
+    events.sort(function(a, b) {
+      var pa = a.minute.split('+'); var pb = b.minute.split('+');
+      return ((parseInt(pa[0],10)||0) + (pa[1]?(parseInt(pa[1],10)||0)*0.01:0)) - ((parseInt(pb[0],10)||0) + (pb[1]?(parseInt(pb[1],10)||0)*0.01:0));
+    });
+    return events;
+  }
+
+  function parseMatchCommentsLocal(html) {
+    if (!html) return [];
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var results = [];
+    function findNextTobl(headingText) {
+      var bolds = doc.querySelectorAll('b');
+      for (var bi = 0; bi < bolds.length; bi++) {
+        if (bolds[bi].textContent.indexOf(headingText) === -1) continue;
+        var el = bolds[bi];
+        while (el && !(el.tagName === 'TABLE' && el.className.indexOf('tobl') !== -1)) el = el.parentElement;
+        if (!el) continue;
+        var sib = el.nextElementSibling;
+        while (sib) { if (sib.tagName === 'TABLE' && sib.className.indexOf('tobl') !== -1) return sib; sib = sib.nextElementSibling; }
+      }
+      return null;
+    }
+    var coachTobl = findNextTobl('Комментарии тренеров команд');
+    if (coachTobl) {
+      var nol = coachTobl.querySelector('table.nol');
+      if (nol) {
+        var nolRows = nol.querySelectorAll('tr');
+        for (var ri = 0; ri < nolRows.length; ri++) {
+          var tds = nolRows[ri].querySelectorAll(':scope > td'); if (tds.length < 2) continue;
+          var timing = null;
+          for (var ti = 0; ti < tds.length; ti++) {
+            var bs = tds[ti].querySelectorAll('b');
+            for (var bi2 = 0; bi2 < bs.length; bi2++) {
+              var bt = bs[bi2].textContent.toLowerCase();
+              if (bt.indexOf('до матча') !== -1 || bt.indexOf('перед матчем') !== -1) { timing = 'before'; break; }
+              if (bt.indexOf('после матча') !== -1) { timing = 'after'; break; }
+            }
+            if (timing) break;
+          }
+          if (!timing) continue;
+          var sides = ['home', 'away'];
+          for (var si = 0; si < 2; si++) {
+            var cd = tds[si].querySelector('div[style*="padding-top:5px"]'); if (!cd) continue;
+            var tm = cd.textContent.match(/\):\s*"([^"]+)"/); if (!tm) continue;
+            var lks = cd.querySelectorAll('a b');
+            var nick = lks.length > 0 ? lks[lks.length-1].textContent.trim() : ''; if (!nick) continue;
+            var team = ''; var bbs = cd.querySelectorAll('b');
+            for (var bi3 = 0; bi3 < bbs.length; bi3++) { if (!bbs[bi3].closest('a')) { team = bbs[bi3].textContent.trim(); break; } }
+            results.push({ type: 'coach', side: sides[si], timing: timing, nick: nick, team: team, text: tm[1].trim() });
+          }
+        }
+      }
+    }
+    var matchTobl = findNextTobl('Комментарии к матчу');
+    if (matchTobl) {
+      var mrows = matchTobl.querySelectorAll('tr[id^="c"]');
+      for (var mri = 0; mri < mrows.length; mri++) {
+        var id = mrows[mri].id.replace('c',''); if (!id || isNaN(Number(id))) continue;
+        var ns = mrows[mri].querySelector('span[id="nick'+id+'"]'); if (!ns) continue;
+        var nick2 = ns.textContent.trim(); if (!nick2) continue;
+        var md = mrows[mri].querySelector('div[id="mess'+id+'"]');
+        var td2 = mrows[mri].querySelector('div[id="id'+id+'"]');
+        var rawText = md ? md.textContent.trim() : (td2 ? td2.textContent.trim() : ''); if (!rawText) continue;
+        results.push({ type: 'match', nick: nick2, text: rawText });
+      }
+    }
+    return results;
+  }
+
+  function initDivisionMatchComments(nationId) {
+    if (!nationId) return;
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Матчи с комментариями';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+
+      // --- BB-code formatter for one match ---
+      function formatMatchBBCode(divName, tourNum, match, details) {
+        var parts = [];
+
+        // Header
+        parts.push('[hr]');
+        parts.push('[b]' + divName + ' — Тур ' + tourNum + '[/b]');
+
+        // Match link
+        parts.push(
+          '[table align=center border=0][tr][td]' +
+          '[a href=' + match.matchUrl + ' target="_blank"]' +
+          match.homeTeam + ' - ' + match.awayTeam + '  ' + match.score +
+          '[/a][/td][/tr][/table]'
+        );
+
+        // Strength
+        if (details.strength) {
+          var sLines = [];
+          function fmtStrRow(row) {
+            var diff = Math.abs(row.awayValue - row.homeValue);
+            var diffStr = diff > 0 ? '[small]+' + diff + '[/small]' : '';
+            var hw = Math.max(row.homePercent - 10, 5);
+            var aw = Math.max(row.awayPercent - 10, 5);
+            var homeBg, homeFg, awayBg, awayFg, hd, ad;
+            if (row.homeValue >= row.awayValue) {
+              homeBg = '#87e878'; homeFg = '#060'; hd = diffStr;
+              awayBg = '#ff967e'; awayFg = '#620'; ad = '';
+            } else {
+              homeBg = '#ff967e'; homeFg = '#620'; hd = '';
+              awayBg = '#87e878'; awayFg = '#060'; ad = diffStr;
+            }
+            return '[table width=100%][tr]' +
+              '[td align=left]' + row.label + '[/td]' +
+              '[td bgcolor=' + homeBg + ' width=' + hw + '% align=center][b][color=' + homeFg + ']' + row.homeValue + hd + '[/color][/b][/td]' +
+              '[td bgcolor=' + awayBg + ' width=' + aw + '%][b][color=' + awayFg + ']' + row.awayValue + ad + '[/color][/b][/td]' +
+              '[/tr][/table]';
+          }
+          if (details.strength.start) sLines.push(fmtStrRow(details.strength.start));
+          if (details.strength.end) sLines.push(fmtStrRow(details.strength.end));
+          if (sLines.length) parts.push(sLines.join('\n'));
+        }
+
+        // Events
+        if (details.events && details.events.length > 0) {
+          for (var ei = 0; ei < details.events.length; ei++) {
+            var e = details.events[ei];
+            var desc = e.descriptionBBCode || e.playerName;
+            var evLine = '[table width=70% align=center border=0][tr][td align=center]⚽ ' +
+              e.minute + "' " + desc + (e.score ? ' (' + e.score + ')' : '') +
+              '[/td][/tr][/table]';
+            parts.push(evLine);
+          }
+        }
+
+        // Coach comments — 2-column table, one row per timing
+        var comments = details.comments || [];
+        var coachBefore = { home: null, away: null };
+        var coachAfter  = { home: null, away: null };
+        var matchComments = [];
+
+        for (var ci = 0; ci < comments.length; ci++) {
+          var cm = comments[ci];
+          if (cm.type === 'coach') {
+            var slot = cm.timing === 'before' ? coachBefore : coachAfter;
+            if (cm.side === 'home') slot.home = cm;
+            else slot.away = cm;
+          } else {
+            matchComments.push(cm);
+          }
+        }
+
+        function coachCell(cm, timing) {
+          if (!cm) return '[td width=50%][/td]';
+          var label = cm.timing === 'before' ? 'до матча' : 'после матча';
+          return '[td width=50%][b]' + cm.nick + '[/b] (' + (cm.team || '') + ', ' + label + '): "' + cm.text + '"[/td]';
+        }
+
+        var hasCoachBefore = coachBefore.home || coachBefore.away;
+        var hasCoachAfter  = coachAfter.home  || coachAfter.away;
+
+        if (hasCoachBefore || hasCoachAfter) {
+          var coachRows = [];
+          if (hasCoachBefore) {
+            coachRows.push('[tr]' + coachCell(coachBefore.home, 'before') + coachCell(coachBefore.away, 'before') + '[/tr]');
+          }
+          if (hasCoachAfter) {
+            coachRows.push('[tr]' + coachCell(coachAfter.home, 'after') + coachCell(coachAfter.away, 'after') + '[/tr]');
+          }
+          parts.push('[table border=0 width=100%]' + coachRows.join('') + '[/table]');
+        }
+
+        // Match comments — full width
+        if (matchComments.length > 0) {
+          var mcRows = matchComments.map(function(mc) {
+            var nick = mc.nick || mc.managerNick || '';
+            return '[tr][td]' + nick + ': "' + mc.text + '"[/td][/tr]';
+          });
+          parts.push('[table border=0 width=100%]' + mcRows.join('') + '[/table]');
+        }
+
+        return parts.join('\n');
+      }
+
+      // --- Main flow ---
+      httpGet(SITE_CONFIG.BASE_URL + '/teams_cntr.php?num=' + nationId, function(err, html) {
+        if (err || !html) {
+          alert('Ошибка загрузки дивизионов');
+          btn.textContent = 'Матчи с комментариями';
+          return;
+        }
+
+        var divisions = (function parseDivLinks(h) {
+          var doc = new DOMParser().parseFromString(h, 'text/html');
+          var anchors = doc.querySelectorAll('a[href*="v2champ.php"]');
+          var res = []; var seen = {};
+          for (var i = 0; i < anchors.length; i++) {
+            var a = anchors[i];
+            var name = a.textContent.trim();
+            if (!name) continue;
+            var url = a.getAttribute('href') || '';
+            var m = url.match(/[?&]num=(\d+)/);
+            var divId = m ? m[1] : '';
+            if (!divId || seen[divId]) continue;
+            seen[divId] = true;
+            res.push({ name: name, divisionId: divId });
+          }
+          return res;
+        })(html);
+
+        if (!divisions.length) {
+          alert('Дивизионы не найдены');
+          btn.textContent = 'Матчи с комментариями';
+          return;
+        }
+
+        var allMatchBBCodes = [];
+        var divIndex = 0;
+
+        function processNextDiv() {
+          if (divIndex >= divisions.length) {
+            // Done — insert into memo
+            if (allMatchBBCodes.length > 0) {
+              var memo = document.getElementById('memo');
+              if (memo) {
+                var text = allMatchBBCodes.join('\n');
+                memo.value = memo.value ? memo.value + '\n\n' + text : text;
+                memo.dispatchEvent(new Event('change'));
+                if (typeof preview === 'function') preview();
+              }
+            } else {
+              alert('Матчей с комментариями не найдено');
+            }
+            btn.textContent = 'Матчи с комментариями';
+            return;
+          }
+
+          var div = divisions[divIndex++];
+          var divId = div.divisionId;
+          var divName = div.name;
+
+          // Get tour info
+          httpGet(SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divId + '&tblshow=1', function(e1, h1) {
+            if (e1 || !h1) { setTimeout(processNextDiv, 300); return; }
+
+            var tourInfo = (function parseTI(h) {
+              var doc = new DOMParser().parseFromString(h, 'text/html');
+              var anchors = doc.querySelectorAll('a[href*="tblshow=1&tour="]');
+              var seen = {}; var currentTour = 1; var foundRed = false;
+              for (var i = 0; i < anchors.length; i++) {
+                var href = anchors[i].getAttribute('href') || '';
+                var m = href.match(/[?&]tour=(\d+)/);
+                if (!m) continue;
+                var tn = parseInt(m[1], 10);
+                if (seen[tn]) continue; seen[tn] = true;
+                if (anchors[i].querySelector('font[color="red"]') && !foundRed) {
+                  currentTour = tn; foundRed = true;
+                }
+              }
+              return { currentTour: currentTour };
+            })(h1);
+
+            var lastTour = Math.max(1, tourInfo.currentTour - 1);
+
+            setTimeout(function() {
+              httpGet(SITE_CONFIG.BASE_URL + '/v2champ.php?num=' + divId + '&tblshow=1&tour=' + lastTour, function(e2, h2) {
+                if (e2 || !h2) { setTimeout(processNextDiv, 300); return; }
+
+                // Parse matches
+                var matches = (function parseML(h) {
+                  var doc = new DOMParser().parseFromString(h, 'text/html');
+                  var rows = doc.querySelectorAll('tr');
+                  var res = []; var seen = {};
+                  for (var i = 0; i < rows.length; i++) {
+                    var row = rows[i];
+                    if (row.querySelector('a[href*="previewmatch.php"]')) continue;
+                    var vl = row.querySelector('a[href*="viewmatch.php"]');
+                    if (!vl) continue;
+                    var rl = row.querySelectorAll('a[href*="roster.php"]');
+                    if (rl.length < 2) continue;
+                    var href = vl.getAttribute('href') || '';
+                    var mid = (href.match(/[?&]match_id=(\d+)/) || [])[1];
+                    var day = (href.match(/[?&]day=(\d+)/) || [])[1];
+                    if (!mid || !day || seen[mid]) continue;
+                    seen[mid] = true;
+                    var sc = vl.querySelector('b');
+                    var score = sc ? sc.textContent.trim() : '';
+                    if (!score) continue;
+                    res.push({
+                      matchId: mid, day: day,
+                      homeTeam: rl[0].textContent.trim(),
+                      awayTeam: rl[1].textContent.trim(),
+                      score: score,
+                      matchUrl: SITE_CONFIG.BASE_URL + '/viewmatch.php?day=' + day + '&match_id=' + mid
+                    });
+                  }
+                  return res;
+                })(h2);
+
+                var matchIndex = 0;
+
+                function processNextMatch() {
+                  if (matchIndex >= matches.length) {
+                    setTimeout(processNextDiv, 300);
+                    return;
+                  }
+                  var match = matches[matchIndex++];
+
+                  // Check cache first
+                  var cached = getMatchDetailsCache(match.matchId);
+                  if (cached) {
+                    if (cached.comments && cached.comments.length > 0) {
+                      allMatchBBCodes.push(formatMatchBBCode(divName, lastTour, match, cached));
+                    }
+                    processNextMatch();
+                    return;
+                  }
+
+                  setTimeout(function() {
+                    httpGet(SITE_CONFIG.BASE_URL + '/viewmatch.php?day=' + match.day + '&match_id=' + match.matchId, function(em, hm) {
+                      if (!em && hm) {
+                        var details = {
+                          strength: parseMatchStrengthLocal(hm),
+                          events: parseMatchEventsLocal(hm),
+                          comments: parseMatchCommentsLocal(hm),
+                          views: null
+                        };
+                        setMatchDetailsCache(match.matchId, details);
+                        if (details.comments && details.comments.length > 0) {
+                          allMatchBBCodes.push(formatMatchBBCode(divName, lastTour, match, details));
+                        }
+                      }
+                      processNextMatch();
+                    });
+                  }, 300);
+                }
+
+                processNextMatch();
+              });
+            }, 300);
+          });
+        }
+
+        processNextDiv();
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 
   // ========== BB-Code Toolbar (fed_news.php) ==========
@@ -1887,6 +3987,356 @@ const href = location.href;
     navPanel.appendChild(link);
   }
 
+  // ========== Match Copy Buttons (v2champ.php) ==========
+
+  function initMatchCopyButtons() {
+    // Find all match rows: <tr> containing a[href*="viewmatch.php"] and two a[href*="roster.php"]
+    var allRows = document.querySelectorAll('tr');
+    var seen = {};
+
+    for (var i = 0; i < allRows.length; i++) {
+      var row = allRows[i];
+      var vmLink = row.querySelector('a[href*="viewmatch.php"]');
+      if (!vmLink) continue;
+      var rosterLinks = row.querySelectorAll('a[href*="roster.php"]');
+      if (rosterLinks.length < 2) continue;
+
+      var href = vmLink.getAttribute('href') || '';
+      var matchIdM = href.match(/[?&]match_id=(\d+)/);
+      var dayM = href.match(/[?&]day=(\d+)/);
+      if (!matchIdM || !dayM) continue;
+      var matchId = matchIdM[1];
+      if (seen[matchId]) continue;
+      seen[matchId] = true;
+
+      // Skip unplayed matches (previewmatch)
+      if (row.querySelector('a[href*="previewmatch.php"]')) continue;
+
+      // Add copy button to the score cell (the one containing viewmatch link)
+      var scoreTd = vmLink.closest('td');
+      if (!scoreTd) continue;
+
+      var copyBtn = document.createElement('span');
+      copyBtn.id = 'vsol-copy-match-' + matchId;
+      copyBtn.textContent = '📋';
+      copyBtn.title = 'Копировать BB-code матча';
+      copyBtn.style.cssText = 'cursor:pointer; margin-left:4px; font-size:11px; opacity:0.6;';
+      copyBtn.onmouseover = function() { this.style.opacity = '1'; };
+      copyBtn.onmouseout = function() { this.style.opacity = '0.6'; };
+
+      (function(mid, day, btn) {
+        btn.onclick = function() {
+          btn.textContent = '⏳';
+          var matchUrl = SITE_CONFIG.BASE_URL + '/viewmatch.php?day=' + day + '&match_id=' + mid;
+          httpGet(matchUrl, function(err, html) {
+            if (err || !html) {
+              btn.textContent = '❌';
+              setTimeout(function() { btn.textContent = '📋'; }, 2000);
+              return;
+            }
+
+            var header = parseMatchHeaderLocal(html);
+            var strength = parseMatchStrengthLocal(html);
+            var events = parseMatchEventsLocal(html);
+
+            var parts = [];
+
+            // Match header
+            if (header) {
+              parts.push('[table align=center border=0][tr][td][a href=' + matchUrl + ' target="_blank"][b]' +
+                header.homeTeam + '[/b] - [b]' + header.awayTeam + '[/b]  ' + header.score + '[/a][/td][/tr][/table]');
+            }
+
+            // Strength
+            if (strength) {
+              function fmtStr(row) {
+                if (!row) return '';
+                var diff = Math.abs(row.awayValue - row.homeValue);
+                var diffStr = diff > 0 ? '[small]+' + diff + '[/small]' : '';
+                var hw = Math.max(row.homePercent - 10, 5);
+                var aw = Math.max(row.awayPercent - 10, 5);
+                var hd = row.homeValue >= row.awayValue ? diffStr : '';
+                var ad = row.awayValue > row.homeValue ? diffStr : '';
+                return '[table width=100%][tr]' +
+                  '[td align=left]' + row.label + '[/td]' +
+                  '[td bgcolor=#ff967e width=' + hw + '% align=center][b][color=#620]' + row.homeValue + hd + '[/color][/b][/td]' +
+                  '[td bgcolor=#87e878 width=' + aw + '%][b][color=#060]' + row.awayValue + ad + '[/color][/b][/td]' +
+                  '[/tr][/table]';
+              }
+              if (strength.start) parts.push(fmtStr(strength.start));
+              if (strength.end) parts.push(fmtStr(strength.end));
+            }
+
+            // Events
+            if (events && events.length > 0) {
+              for (var ei = 0; ei < events.length; ei++) {
+                var e = events[ei];
+                var desc = e.descriptionBBCode || e.playerName;
+                parts.push('[table width=70% align=center border=0][tr][td align=center]⚽ ' +
+                  e.minute + "' " + desc + (e.score ? ' (' + e.score + ')' : '') +
+                  '[/td][/tr][/table]');
+              }
+            }
+
+            var bbcode = parts.join('\n');
+
+            // Copy to clipboard
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(bbcode).then(function() {
+                btn.textContent = '✅';
+                setTimeout(function() { btn.textContent = '📋'; }, 2000);
+              }).catch(function() {
+                fallbackCopy(bbcode, btn);
+              });
+            } else {
+              fallbackCopy(bbcode, btn);
+            }
+          });
+        };
+      })(matchId, dayM[1], copyBtn);
+
+      scoreTd.appendChild(copyBtn);
+    }
+
+    function fallbackCopy(text, btn) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed; left:-9999px;';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        btn.textContent = '✅';
+      } catch (e) {
+        btn.textContent = '❌';
+      }
+      document.body.removeChild(ta);
+      setTimeout(function() { btn.textContent = '📋'; }, 2000);
+    }
+  }
+
+  // ========== Transfer Watch (manager_transflist.php) ==========
+
+  var WATCH_STORAGE_KEY = 'vsol_transfer_watch';
+
+  function getWatchList() {
+    try {
+      var raw = localStorage.getItem(WATCH_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  }
+
+  function saveWatchList(list) {
+    try { localStorage.setItem(WATCH_STORAGE_KEY, JSON.stringify(list)); } catch (e) {}
+  }
+
+  function initTransferWatch() {
+    // Find the navigation bar: div.lh18.txtr containing "Выставить на рынок"
+    var navDivs = document.querySelectorAll('div.lh18.txtr');
+    var navDiv = null;
+    for (var i = 0; i < navDivs.length; i++) {
+      if (navDivs[i].textContent.indexOf('Выставить на рынок') !== -1) {
+        navDiv = navDivs[i];
+        break;
+      }
+    }
+    if (!navDiv) return;
+
+    // Add "Наблюдение" link to the nav bar
+    var sep = document.createTextNode(' | ');
+    navDiv.appendChild(sep);
+
+    var watchLink = document.createElement('a');
+    watchLink.id = 'vsol-watch-link';
+    watchLink.href = 'javascript:void(0)';
+    watchLink.className = 'mnu';
+    watchLink.textContent = 'Наблюдение';
+    watchLink.onclick = function() { toggleWatchPanel(); return false; };
+    navDiv.appendChild(watchLink);
+
+    // Create the watch panel (hidden by default)
+    var panel = document.createElement('div');
+    panel.id = 'vsol-watch-panel';
+    panel.style.cssText = 'display:none; margin-top:10px; padding:8px; border:1px solid #ccc; background:#f8fff8;';
+
+    // Input row: team number input + add button
+    var inputRow = document.createElement('div');
+    inputRow.id = 'vsol-watch-input-row';
+    inputRow.style.cssText = 'margin-bottom:8px;';
+
+    var inputLabel = document.createElement('span');
+    inputLabel.id = 'vsol-watch-input-label';
+    inputLabel.className = 'lh18 txt';
+    inputLabel.textContent = 'Номер команды: ';
+    inputRow.appendChild(inputLabel);
+
+    var input = document.createElement('input');
+    input.id = 'vsol-watch-input';
+    input.type = 'text';
+    input.className = 'form2';
+    input.style.cssText = 'width:80px; margin-right:6px;';
+    input.placeholder = 'num';
+    inputRow.appendChild(input);
+
+    var addBtn = document.createElement('a');
+    addBtn.id = 'vsol-watch-add-btn';
+    addBtn.href = 'javascript:void(0)';
+    addBtn.className = 'butn';
+    addBtn.textContent = 'Добавить';
+    addBtn.onclick = function() {
+      var teamNum = input.value.trim();
+      if (!teamNum || isNaN(parseInt(teamNum, 10))) {
+        alert('Введите номер команды');
+        return;
+      }
+      addBtn.textContent = 'Загрузка...';
+      // Fetch roster page to get team name
+      httpGet(SITE_CONFIG.BASE_URL + '/roster.php?num=' + teamNum, function(err, html) {
+        addBtn.textContent = 'Добавить';
+        if (err || !html) {
+          alert('Ошибка загрузки команды');
+          return;
+        }
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        // Team name from the page title or h1
+        var teamName = '';
+        var tmhd = doc.querySelector('.tmhd');
+        if (tmhd) {
+          teamName = tmhd.textContent.trim().replace(/\s*\([^)]+\)\s*$/, '');
+        }
+        if (!teamName) {
+          var h1 = doc.querySelector('h1');
+          if (h1) teamName = h1.textContent.trim();
+        }
+        if (!teamName) teamName = 'Команда #' + teamNum;
+
+        var list = getWatchList();
+        // Check for duplicates
+        for (var wi = 0; wi < list.length; wi++) {
+          if (list[wi].teamNum === teamNum) {
+            alert('Команда уже в списке');
+            return;
+          }
+        }
+        list.push({ teamNum: teamNum, teamName: teamName, addedAt: Date.now() });
+        saveWatchList(list);
+        input.value = '';
+        renderWatchList();
+      });
+    };
+    inputRow.appendChild(addBtn);
+    panel.appendChild(inputRow);
+
+    // Watch list container
+    var listContainer = document.createElement('div');
+    listContainer.id = 'vsol-watch-list';
+    panel.appendChild(listContainer);
+
+    // Insert panel after the nav bar's parent td
+    var parentTd = navDiv.closest('td');
+    if (parentTd && parentTd.parentNode) {
+      var panelRow = document.createElement('tr');
+      panelRow.id = 'vsol-watch-panel-row';
+      var panelTd = document.createElement('td');
+      panelTd.id = 'vsol-watch-panel-td';
+      panelTd.setAttribute('colspan', '2');
+      panelTd.appendChild(panel);
+      panelRow.appendChild(panelTd);
+      parentTd.parentNode.parentNode.insertBefore(panelRow, parentTd.parentNode.nextSibling);
+    }
+
+    function toggleWatchPanel() {
+      panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      if (panel.style.display !== 'none') renderWatchList();
+    }
+
+    function renderWatchList() {
+      var list = getWatchList();
+      listContainer.innerHTML = '';
+
+      if (list.length === 0) {
+        var empty = document.createElement('div');
+        empty.id = 'vsol-watch-empty';
+        empty.className = 'lh16 txt';
+        empty.style.cssText = 'color:#888;';
+        empty.textContent = 'Список наблюдения пуст';
+        listContainer.appendChild(empty);
+        return;
+      }
+
+      var table = document.createElement('table');
+      table.id = 'vsol-watch-table';
+      table.className = 'tbl';
+      table.style.cssText = 'width:100%;';
+
+      // Header
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      headerRow.id = 'vsol-watch-table-header';
+      headerRow.setAttribute('bgcolor', '#006600');
+      var headers = ['Команда', 'Номер', ''];
+      var headerKeys = ['team', 'num', 'actions'];
+      for (var hi = 0; hi < headers.length; hi++) {
+        var th = document.createElement('td');
+        th.id = 'vsol-watch-col-' + headerKeys[hi];
+        th.className = 'lh18 txtw';
+        th.innerHTML = '<b>' + headers[hi] + '</b>';
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      // Rows
+      var tbody = document.createElement('tbody');
+      for (var ri = 0; ri < list.length; ri++) {
+        (function(entry, idx) {
+          var tr = document.createElement('tr');
+          tr.id = 'vsol-watch-row-' + idx;
+
+          var tdName = document.createElement('td');
+          tdName.id = 'vsol-watch-name-' + idx;
+          tdName.className = 'lh16 txtl';
+          var nameLink = document.createElement('a');
+          nameLink.href = '/roster.php?num=' + entry.teamNum;
+          nameLink.className = 'mnu';
+          nameLink.target = '_blank';
+          nameLink.textContent = entry.teamName;
+          tdName.appendChild(nameLink);
+          tr.appendChild(tdName);
+
+          var tdNum = document.createElement('td');
+          tdNum.id = 'vsol-watch-num-' + idx;
+          tdNum.className = 'lh16 txt';
+          tdNum.textContent = entry.teamNum;
+          tr.appendChild(tdNum);
+
+          var tdActions = document.createElement('td');
+          tdActions.id = 'vsol-watch-actions-' + idx;
+          tdActions.className = 'lh16 txt';
+          var removeBtn = document.createElement('a');
+          removeBtn.id = 'vsol-watch-remove-' + idx;
+          removeBtn.href = 'javascript:void(0)';
+          removeBtn.className = 'mnu';
+          removeBtn.style.cssText = 'color:#990000;';
+          removeBtn.textContent = '✕';
+          removeBtn.title = 'Удалить из наблюдения';
+          removeBtn.onclick = function() {
+            var currentList = getWatchList();
+            currentList.splice(idx, 1);
+            saveWatchList(currentList);
+            renderWatchList();
+          };
+          tdActions.appendChild(removeBtn);
+          tr.appendChild(tdActions);
+
+          tbody.appendChild(tr);
+        })(list[ri], ri);
+      }
+      table.appendChild(tbody);
+      listContainer.appendChild(table);
+    }
+  }
+
   // ========== Interseason Cup Results (fed_news.php) ==========
 
   function initInterseasonCupResults() {
@@ -2025,6 +4475,448 @@ const href = location.href;
     btnContainer.insertBefore(btn, btnContainer.firstChild);
   }
 
+  // ========== Continental Cups (fed_news.php) ==========
+
+  function initContinentalCups(nationId) {
+    if (!nationId) return;
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Мирокубки отборы';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+
+      // Step 1: fetch teams_cntr.php to build teamNum → manager map
+      httpGet(SITE_CONFIG.BASE_URL + '/teams_cntr.php?num=' + nationId, function(errT, htmlT) {
+        var managerMap = {};
+        if (!errT && htmlT) {
+          var docT = new DOMParser().parseFromString(htmlT, 'text/html');
+          var teamRows = docT.querySelectorAll('tr');
+          for (var ri = 0; ri < teamRows.length; ri++) {
+            var teamLink = teamRows[ri].querySelector('a[href*="roster.php"]');
+            var mgrLink  = teamRows[ri].querySelector('a[href*="v3_profile.php"]');
+            if (!teamLink || !mgrLink) continue;
+            var tHref = teamLink.getAttribute('href') || '';
+            var tNum  = (tHref.match(/[?&]num=(\d+)/) || [])[1];
+            var mHref = mgrLink.getAttribute('href') || '';
+            var mNum  = (mHref.match(/[?&]num=(\d+)/) || [])[1];
+            // Nick is in td[5] (6th td), full name is in td[4] via v3_profile link
+            var tds = teamRows[ri].querySelectorAll('td');
+            var mNick = tds.length > 5 ? tds[5].textContent.trim() : '';
+            if (!mNick) mNick = mgrLink.textContent.trim(); // fallback to full name
+            if (tNum && mNum && mNick) {
+              managerMap[tNum] = { nick: mNick, num: mNum };
+            }
+          }
+        }
+
+        // Step 2: fetch cup page
+        setTimeout(function() {
+          httpGet(SITE_CONFIG.BASE_URL + '/fed_continental_cups.php?num=' + nationId, function(err, html) {
+            if (err || !html) {
+              alert('Ошибка загрузки мирокубков');
+              btn.textContent = 'Мирокубки отборы';
+              return;
+            }
+
+            var entries = parseContinentalCups(html);
+            if (!entries.length) {
+              alert('Данные мирокубков не найдены');
+              btn.textContent = 'Мирокубки отборы';
+              return;
+            }
+
+            // Attach manager info
+            for (var i = 0; i < entries.length; i++) {
+              var mgr = managerMap[entries[i].teamNum];
+              if (mgr) {
+                entries[i].managerNick = mgr.nick;
+                entries[i].managerNum  = mgr.num;
+              }
+            }
+
+            var bbcode = formatContinentalCupsBBCode(entries);
+            var memo = document.getElementById('memo');
+            if (memo) {
+              memo.value = memo.value ? memo.value + '\n\n' + bbcode : bbcode;
+              memo.dispatchEvent(new Event('input'));
+            }
+            btn.textContent = 'Мирокубки отборы';
+          });
+        }, 300);
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
+  }
+
+  function parseContinentalCups(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+
+    // Find the main cup table: table.tbl with style containing margin-bottom:10px
+    var tables = doc.querySelectorAll('table.tbl');
+    var mainTable = null;
+    for (var i = 0; i < tables.length; i++) {
+      var style = tables[i].getAttribute('style') || '';
+      if (style.indexOf('margin-bottom') !== -1) {
+        mainTable = tables[i];
+        break;
+      }
+    }
+    if (!mainTable) return [];
+
+    var entries = [];
+    var rows = mainTable.querySelectorAll('tr');
+
+    for (var ri = 0; ri < rows.length; ri++) {
+      var row = rows[ri];
+      // Skip header row
+      if (row.getAttribute('bgcolor') === '#006600') continue;
+
+      // Get direct td children only (not nested)
+      var tds = row.querySelectorAll(':scope > td');
+      if (tds.length < 6) continue;
+
+      // td[0]: position number
+      var pos = tds[0].textContent.trim().replace('.', '');
+      if (!pos || isNaN(parseInt(pos, 10))) continue;
+
+      // td[1]: cup name
+      var cupName = tds[1].textContent.trim();
+
+      // td[2]: team link + stage badge img
+      var teamLink = tds[2].querySelector('a[href*="roster.php"]');
+      if (!teamLink) continue;
+      var teamHref = teamLink.getAttribute('href') || '';
+      var teamNum = (teamHref.match(/[?&]num=(\d+)/) || [])[1] || '';
+      // Team name: strip city in parentheses
+      var teamName = teamLink.textContent.trim().replace(/\s*\([^)]+\)\s*$/, '');
+
+      // Stage from img title in td[2]: title="<b>CupName</b></br>StageName"
+      var stageImg = tds[2].querySelector('img[title]');
+      var stageName = '';
+      if (stageImg) {
+        var title = stageImg.getAttribute('title') || '';
+        // Decode HTML entities and extract stage after </br>
+        var decoded = title.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        var stageMatch = decoded.match(/<\/b><\/br>([^"]+)/);
+        if (stageMatch) stageName = stageMatch[1].trim();
+      }
+
+      // td[5]: qualification method
+      var qualification = tds[5].textContent.trim();
+
+      entries.push({
+        pos: parseInt(pos, 10),
+        cupName: cupName,
+        teamName: teamName,
+        teamNum: teamNum,
+        stageName: stageName,
+        qualification: qualification
+      });
+    }
+
+    return entries;
+  }
+
+  function formatContinentalCupsBBCode(entries) {
+    // Assign row colors: first cup = #FFCCFF, subsequent cups = #FFEE88
+    // Determine the "top" cup (first entry's cup name)
+    var topCup = entries.length > 0 ? entries[0].cupName : '';
+
+    var header = '[table width=100% align=center border=1]' +
+      '[tr]' +
+      '[td bgcolor=darkgreen width=25%][color=#FFFFE3][b]Команда[/b][/color][/td]' +
+      '[td bgcolor=darkgreen width=25%][color=#FFFFE3][b]Менеджер[/b][/color][/td]' +
+      '[td bgcolor=darkgreen width=25%][color=#FFFFE3][b]Результат[/b][/color][/td]' +
+      '[td bgcolor=darkgreen][color=#FFFFE3][b]Турнир[/b][/color][/td]' +
+      '[/tr]';
+
+    var rows = entries.map(function(e) {
+      var bg = e.cupName === topCup ? '#FFCCFF' : '#FFEE88';
+      var teamHref = e.teamNum ? '/roster.php?num=' + e.teamNum : '#';
+      var stageAndCup = e.stageName ? e.stageName + ' ' + e.cupName : e.cupName;
+
+      var managerCell = '';
+      if (e.managerNick && e.managerNum) {
+        managerCell = '[a href=/v3_profile.php?num=' + e.managerNum + ' target="_blank"][b][color=#060]' + e.managerNick + '[/color][/b][/a]';
+      }
+
+      return '[tr]' +
+        '[td bgcolor=' + bg + '][a href=' + teamHref + ' target="_blank"][b][color=#060]' + e.teamName + '[/color][/b][/a][/td]' +
+        '[td bgcolor=' + bg + ']' + managerCell + '[/td]' +
+        '[td bgcolor=' + bg + '][b][color=#060]' + e.qualification + '[/color][/b][/td]' +
+        '[td bgcolor=' + bg + '][b][color=#060]' + stageAndCup + '[/color][/b][/td]' +
+        '[/tr]';
+    });
+
+    return header + '\n' + rows.join('\n') + '\n[/table]';
+  }
+
+  // ========== Played Continental Cup Matches (fed_news.php) ==========
+
+  function initPlayedContinentalCupMatches(nationId) {
+    if (!nationId) return;
+    var btnContainer = document.querySelector('p:has(a.butn)');
+    if (!btnContainer) return;
+
+    var btn = document.createElement('a');
+    btn.href = 'javascript:void(0)';
+    btn.className = 'butn';
+    btn.textContent = 'Сыгранные мирокубки';
+    btn.style.marginLeft = '5px';
+
+    btn.onclick = function() {
+      btn.textContent = 'Загрузка...';
+
+      // Remove existing select if any
+      var existing = btnContainer.querySelector('#cup-team-selector');
+      if (existing) existing.remove();
+
+      // Fetch cup page to get list of teams
+      httpGet(SITE_CONFIG.BASE_URL + '/fed_continental_cups.php?num=' + nationId, function(err, html) {
+        if (err || !html) {
+          alert('Ошибка загрузки мирокубков');
+          btn.textContent = 'Сыгранные мирокубки';
+          return;
+        }
+
+        var entries = parseContinentalCups(html);
+        if (!entries.length) {
+          alert('Команды в мирокубках не найдены');
+          btn.textContent = 'Сыгранные мирокубки';
+          return;
+        }
+
+        // Deduplicate teams
+        var seen = {};
+        var teams = [];
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i];
+          if (!seen[e.teamNum]) {
+            seen[e.teamNum] = true;
+            teams.push({ teamNum: e.teamNum, teamName: e.teamName });
+          }
+        }
+
+        // Build select
+        var select = document.createElement('select');
+        select.id = 'cup-team-selector';
+        select.style.marginLeft = '5px';
+
+        var defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '— Выберите команду —';
+        select.appendChild(defaultOpt);
+
+        for (var ti = 0; ti < teams.length; ti++) {
+          var opt = document.createElement('option');
+          opt.value = teams[ti].teamNum;
+          opt.textContent = teams[ti].teamName;
+          select.appendChild(opt);
+        }
+
+        select.onchange = function() {
+          var teamNum = select.value;
+          if (!teamNum) return;
+          var teamName = select.options[select.selectedIndex].textContent;
+          select.disabled = true;
+          btn.textContent = 'Загрузка матчей...';
+
+          httpGet(SITE_CONFIG.BASE_URL + '/roster_m.php?num=' + teamNum, function(errR, htmlR) {
+            if (errR || !htmlR) {
+              alert('Ошибка загрузки матчей');
+              select.disabled = false;
+              btn.textContent = 'Сыгранные мирокубки';
+              return;
+            }
+
+            // Parse cup matches from roster_m.php
+            var cupMatches = parseCupMatchesFromRoster(htmlR);
+            if (!cupMatches.length) {
+              alert('Сыгранных матчей в мирокубках не найдено');
+              select.disabled = false;
+              btn.textContent = 'Сыгранные мирокубки';
+              return;
+            }
+
+            // Load each match sequentially
+            var matchIndex = 0;
+            var sections = [];
+
+            function loadNextCupMatch() {
+              if (matchIndex >= cupMatches.length) {
+                // All done — format and insert
+                var bbcode = formatCupMatchesBBCode(teamName, sections);
+                var memo = document.getElementById('memo');
+                if (memo) {
+                  memo.value = memo.value ? memo.value + '\n\n' + bbcode : bbcode;
+                  memo.dispatchEvent(new Event('input'));
+                }
+                select.disabled = false;
+                btn.textContent = 'Сыгранные мирокубки';
+                return;
+              }
+
+              var match = cupMatches[matchIndex++];
+              btn.textContent = 'Загрузка ' + matchIndex + '/' + cupMatches.length + '...';
+
+              setTimeout(function() {
+                httpGet(match.matchUrl, function(errM, htmlM) {
+                  if (!errM && htmlM) {
+                    var strength = parseMatchStrengthLocal(htmlM);
+                    var events   = parseMatchEventsLocal(htmlM);
+                    var header   = parseMatchHeaderLocal(htmlM);
+                    sections.push({
+                      match: match,
+                      strength: strength,
+                      events: events,
+                      header: header
+                    });
+                  }
+                  loadNextCupMatch();
+                });
+              }, 300);
+            }
+
+            loadNextCupMatch();
+          });
+        };
+
+        btn.parentNode.insertBefore(select, btn.nextSibling);
+        btn.textContent = 'Сыгранные мирокубки';
+      });
+    };
+
+    btnContainer.insertBefore(btn, btnContainer.firstChild);
+  }
+
+  function parseCupMatchesFromRoster(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var rows = doc.querySelectorAll('table.tbl tr');
+    var matches = [];
+
+    // Find «Стадия» column index from header row
+    var stageIndex = 6; // default fallback
+    var headerRow = doc.querySelector('table.tbl tr[bgcolor="#006600"]');
+    if (headerRow) {
+      var headerTds = headerRow.querySelectorAll('td');
+      for (var hi = 0; hi < headerTds.length; hi++) {
+        if (/Стадия/i.test(headerTds[hi].textContent)) { stageIndex = hi; break; }
+      }
+    }
+
+    for (var i = 1; i < rows.length; i++) {
+      var row = rows[i];
+      var tds = row.querySelectorAll('td');
+      if (tds.length < 11) continue;
+
+      // Filter: tournament cell (td[2]) must contain confederation_cup.php link
+      var cupLink = tds[2].querySelector('a[href*="confederation_cup"]');
+      if (!cupLink) continue;
+
+      // Skip unplayed matches
+      var resultTd = tds[4];
+      if (!resultTd || !resultTd.hasAttribute('title')) continue;
+      if (resultTd.getAttribute('title').trim() === 'Матч ещё не сыгран') continue;
+
+      var tournamentName = cupLink.textContent.trim();
+      var stageName = tds[stageIndex] ? tds[stageIndex].textContent.trim() : '';
+      var opponent = tds[3] ? tds[3].textContent.trim() : '';
+      var result = resultTd.textContent.trim();
+      var homeAway = tds[5] ? tds[5].textContent.trim() : '';
+
+      // Match link in td[10]
+      var matchAnchor = tds[10] ? tds[10].querySelector('a[href*="viewmatch.php"]') : null;
+      if (!matchAnchor) continue;
+
+      var matchHref = matchAnchor.getAttribute('href') || '';
+      var matchUrl = matchHref.startsWith('http') ? matchHref : SITE_CONFIG.BASE_URL + '/' + matchHref.replace(/^\//, '');
+
+      matches.push({
+        tournamentName: tournamentName,
+        stageName: stageName,
+        opponent: opponent,
+        result: result,
+        homeAway: homeAway,
+        matchUrl: matchUrl
+      });
+    }
+
+    return matches;
+  }
+
+  function formatCupMatchesBBCode(teamName, sections) {
+    if (!sections.length) return '';
+
+    var parts = [];
+    parts.push('[b]Мирокубки — ' + teamName + '[/b]');
+    parts.push('[hr]');
+
+    for (var i = 0; i < sections.length; i++) {
+      var s = sections[i];
+      var m = s.match;
+
+      // Match header: tournament + stage
+      parts.push('[b]' + m.tournamentName + (m.stageName ? ' — ' + m.stageName : '') + '[/b]');
+
+      // Match link — use header from viewmatch.php if available, plain text team names
+      var matchTitle;
+      if (s.header && s.header.homeTeam && s.header.awayTeam) {
+        matchTitle = '[b]' + s.header.homeTeam + '[/b] - [b]' + s.header.awayTeam + '[/b]  ' + (s.header.score || m.result);
+      } else {
+        matchTitle = (m.homeAway === 'Д' ? teamName + ' - ' + m.opponent : m.opponent + ' - ' + teamName) + '  ' + m.result;
+      }
+      parts.push(
+        '[table align=center border=0][tr][td]' +
+        '[a href=' + m.matchUrl + ' target="_blank"]' + matchTitle + '[/a]' +
+        '[/td][/tr][/table]'
+      );
+
+      // Strength
+      if (s.strength) {
+        var sLines = [];
+        function fmtRow(row) {
+          if (!row) return '';
+          var diff = Math.abs(row.awayValue - row.homeValue);
+          var diffStr = diff > 0 ? '[small]+' + diff + '[/small]' : '';
+          var hw = Math.max(row.homePercent - 10, 5);
+          var aw = Math.max(row.awayPercent - 10, 5);
+          var hd = row.homeValue >= row.awayValue ? diffStr : '';
+          var ad = row.awayValue > row.homeValue ? diffStr : '';
+          return '[table width=100%][tr]' +
+            '[td align=left]' + row.label + '[/td]' +
+            '[td bgcolor=#ff967e width=' + hw + '% align=center][b][color=#620]' + row.homeValue + hd + '[/color][/b][/td]' +
+            '[td bgcolor=#87e878 width=' + aw + '%][b][color=#060]' + row.awayValue + ad + '[/color][/b][/td]' +
+            '[/tr][/table]';
+        }
+        if (s.strength.start) sLines.push(fmtRow(s.strength.start));
+        if (s.strength.end) sLines.push(fmtRow(s.strength.end));
+        if (sLines.length) parts.push(sLines.join('\n'));
+      }
+
+      // Events
+      if (s.events && s.events.length > 0) {
+        for (var ei = 0; ei < s.events.length; ei++) {
+          var e = s.events[ei];
+          var desc = e.descriptionBBCode || e.playerName;
+          parts.push('[table width=70% align=center border=0][tr][td align=center]⚽ ' +
+            e.minute + "' " + desc + (e.score ? ' (' + e.score + ')' : '') +
+            '[/td][/tr][/table]');
+        }
+      }
+
+      if (i < sections.length - 1) parts.push('');
+    }
+
+    return parts.join('\n');
+  }
+
   // ========== League Table (fed_news.php) ==========
 
   function initLeagueTable() {
@@ -2034,15 +4926,19 @@ const href = location.href;
       var doc = new DOMParser().parseFromString(html, 'text/html');
       var anchors = doc.querySelectorAll('a[href*="v2champ.php"]');
       var results = [];
+      var seen = {};
 
       for (var i = 0; i < anchors.length; i++) {
         var a = anchors[i];
         var name = a.textContent.trim();
-        if (!name) continue;
+        // Skip empty and purely numeric names (team position numbers)
+        if (!name || /^\d+$/.test(name)) continue;
 
         var url = a.getAttribute('href') || '';
         var match = url.match(/[?&]num=(\d+)/);
         var divisionId = match ? match[1] : '';
+        if (!divisionId || seen[divisionId]) continue;
+        seen[divisionId] = true;
 
         results.push({ name: name, url: url, divisionId: divisionId });
       }
@@ -2151,7 +5047,9 @@ const href = location.href;
 
       for (var i = 0; i < data.rows.length; i++) {
         var row = data.rows[i];
-        var teamCell = '[a href=' + row.teamLink + ' target="_blank"]' + row.teamName + '[/a]';
+        var tLink = row.teamLink || '';
+        if (tLink && !tLink.startsWith('http') && !tLink.startsWith('/')) tLink = '/' + tLink;
+        var teamCell = '[a href=' + tLink + ' target="_blank"]' + row.teamName + '[/a]';
         var goals = row.goalsFor + ' - ' + row.goalsAgainst;
         var rowCells = [
           row.position,
@@ -2360,12 +5258,12 @@ const href = location.href;
     function parsePlayedMatch(html) {
       var doc = new DOMParser().parseFromString(html, 'text/html');
       var allLinks = doc.querySelectorAll('a[href*="viewmatch.php"]');
+      // Collect all played match links (exclude previewmatch), take the LAST one
       var viewMatchLink = null;
       for (var li = 0; li < allLinks.length; li++) {
         var h = allLinks[li].getAttribute('href') || '';
         if (h.includes('previewmatch.php')) continue;
-        viewMatchLink = allLinks[li];
-        break;
+        viewMatchLink = allLinks[li]; // keep overwriting — last one wins
       }
       if (!viewMatchLink) return null;
       var matchUrl = viewMatchLink.getAttribute('href') || '';
@@ -2685,7 +5583,7 @@ const href = location.href;
       if (tds.length === 0) return null;
 
       var minute = tds[0].textContent.trim();
-      if (!minute) return null;
+      if (!minute) minute = '?';
 
       var playerLinks = row.querySelectorAll('a.mnu');
       if (playerLinks.length === 0) return null;
@@ -2812,26 +5710,21 @@ const href = location.href;
     }
 
     function formatStrengthRowBBCode(row) {
-      // Home always left, away always right. Colors: weaker=red, stronger=green.
+      // Home always left (red), away always right (green) — fixed layout matching calculator tab
       var diff = Math.abs(row.awayValue - row.homeValue);
       var diffStr = diff > 0 ? '[small]+' + diff + '[/small]' : '';
       var homeWidth = Math.max(row.homePercent - 10, 5);
       var awayWidth = Math.max(row.awayPercent - 10, 5);
 
-      var homeBg, homeFg, awayBg, awayFg, homeDiff, awayDiff;
-      if (row.homeValue >= row.awayValue) {
-        // Home is stronger or equal
-        homeBg = '#87e878'; homeFg = '#060'; homeDiff = diffStr;
-        awayBg = '#ff967e'; awayFg = '#620'; awayDiff = '';
-      } else {
-        // Away is stronger
-        homeBg = '#ff967e'; homeFg = '#620'; homeDiff = '';
-        awayBg = '#87e878'; awayFg = '#060'; awayDiff = diffStr;
-      }
+      // Fixed colors: home=red, away=green; +diff on the stronger side
+      var homeBg = '#ff967e'; var homeFg = '#620';
+      var awayBg = '#87e878'; var awayFg = '#060';
+      var homeDiff = row.homeValue >= row.awayValue ? diffStr : '';
+      var awayDiff = row.awayValue > row.homeValue ? diffStr : '';
 
       return '[table width=100%][tr]' +
         '[td align=left]' + row.label + '[/td]' +
-        '[td bgcolor=' + homeBg + ' width=' + homeWidth + '% align=right][b][color=' + homeFg + ']' + row.homeValue + homeDiff + '[/color][/b][/td]' +
+        '[td bgcolor=' + homeBg + ' width=' + homeWidth + '% align=center][b][color=' + homeFg + ']' + row.homeValue + homeDiff + '[/color][/b][/td]' +
         '[td bgcolor=' + awayBg + ' width=' + awayWidth + '%][b][color=' + awayFg + ']' + row.awayValue + awayDiff + '[/color][/b][/td]' +
         '[/tr][/table]';
     }

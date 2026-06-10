@@ -6,7 +6,7 @@
  * - Played matches: contain viewmatch.php links with actual scores (e.g. "1:0")
  * - Future matches: contain previewmatch.php links with "?:?"
  *
- * The FIRST viewmatch.php link in the page is the most recent played match.
+ * The LAST viewmatch.php link in the page is the most recent played match.
  * The opponent name is in a nation.php link in the same div.
  * The home team country is in the page header (td.hdr2l).
  *
@@ -23,14 +23,13 @@
 export function parsePlayedMatch(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
 
-  // Find the first viewmatch.php link (not previewmatch.php) — this is the most recent played match
+  // Find the LAST viewmatch.php link (not previewmatch.php) — this is the most recent played match
   const viewMatchLinks = doc.querySelectorAll('a[href*="viewmatch.php"]');
   let viewMatchLink = null;
   for (const link of viewMatchLinks) {
     const href = link.getAttribute('href') || '';
     if (href.includes('previewmatch.php')) continue;
-    viewMatchLink = link;
-    break;
+    viewMatchLink = link; // keep overwriting — last one wins
   }
   if (!viewMatchLink) return null;
 
